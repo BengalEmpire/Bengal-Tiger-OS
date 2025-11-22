@@ -11,6 +11,7 @@ OBJS = build/boot.o \
        build/common.o \
        build/idt.o \
        build/isr.o \
+       build/isr_c.o \
        build/pic.o \
        build/keyboard.o \
        build/paging.o \
@@ -45,6 +46,10 @@ build/idt.o: kernel/idt.c
 
 build/isr.o: kernel/isr.s
 	$(AS) $(ASFLAGS) -o $@ $<
+
+# Compile C ISR handlers (from kernel/isr.c) to avoid undefined refs in isr.o
+build/isr_c.o: kernel/isr.c
+	$(CC) $(CFLAGS) -c -o $@ $<
 
 build/pic.o: kernel/pic.c
 	$(CC) $(CFLAGS) -c -o $@ $<

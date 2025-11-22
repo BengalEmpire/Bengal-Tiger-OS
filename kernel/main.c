@@ -17,7 +17,7 @@ typedef struct {
     uint32_t mem_upper;
 } multiboot_info_t;
 
-extern uint32_t bss_end;
+extern uint32_t bss_end; // Retaining the existing uint32_t type
 extern volatile uint32_t tick;
 
 void sleep_ms(uint32_t ms) {
@@ -35,7 +35,8 @@ void kmain(multiboot_info_t *mbi) {
     
     // 2. Memory Management
     uint32_t mem_size = (mbi->mem_upper * 1024) + 0x100000;
-    pmm_init(mem_size, (uint32_t)&bss_end);
+    // Pass the address of the BSS end symbol (resolved by the linker)
+    pmm_init(mem_size, (uint32_t)&bss_end); 
     paging_install(mem_size);
 
     // 3. Drivers

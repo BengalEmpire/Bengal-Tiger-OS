@@ -1,15 +1,26 @@
 ENTRY(start)
-OUTPUT_FORMAT(elf32-i386)
-SECTIONS {
-    . = 1M; /* load address 1MiB */
-    .multiboot : { *(.multiboot) }
-    .text : { *(.text) }
-    .rodata : { *(.rodata) }
-    .data : { *(.data) }
-    .bss : {
-        bss_start = .;
-        *(.bss) *(COMMON)
-        bss_end = .;
-    }
-    /DISCARD/ : { *(.comment) (.note) }
+
+SECTIONS
+{
+	. = 0x00100000; /* Link the kernel at 1MB (0x00100000) */
+
+	.text : AT(ADDR(.text))
+	{
+		KEEP(*(.multiboot)) /* Place the multiboot header FIRST */
+		*(.text)
+		*(.rodata)
+	}
+
+	.data : {
+		*(.data)
+	}
+
+	.bss : {
+		*(.bss)
+		*(COMMON)
+		/* *** CRITICAL FIX: DEFINE THE bss_end SYMBOL *** */
+		PROVIDE(bss_end = .); 
+	}
+
+	/DISCARD/ : { *(.eh_frame) *(.comment) }
 }
