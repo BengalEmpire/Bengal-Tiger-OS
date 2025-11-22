@@ -1,5 +1,3 @@
-// kernel/fat.c (basic stub - reads boot sector and a fixed file)
-
 #include "fat.h"
 #include "disk.h"
 #include "common.h"
@@ -18,6 +16,17 @@ void fat_init() {
 }
 
 void fat_load_file(const char *name, void *buf) {
-    // Stub: Assume hello.txt at sector 1 (adjust for real FAT)
-    ata_read_sector(1, (uint8_t*)buf);
+    // Enhanced stub: Check name and load from fixed sectors
+    if (strcmp(name, "hello.txt") == 0) {
+        ata_read_sector(1, (uint8_t*)buf);
+    } else if (strcmp(name, "config.cfg") == 0) {
+        ata_read_sector(2, (uint8_t*)buf);
+    }
+}
+
+void fat_save_file(const char *name, void *buf) {
+    // Stub write
+    if (strcmp(name, "config.cfg") == 0) {
+        ata_write_sector(2, (uint8_t*)buf);
+    }
 }

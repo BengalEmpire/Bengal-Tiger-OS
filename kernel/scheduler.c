@@ -1,7 +1,8 @@
-// kernel/scheduler.c (stub)
-
 #include "scheduler.h"
 #include "common.h"
+#include "paging.h"
+
+volatile uint32_t tick = 0;
 
 struct task {
     struct regs regs;
@@ -12,25 +13,13 @@ struct task {
 static struct task *current_task;
 
 void scheduler_init() {
-    current_task = (struct task*)pmm_alloc_frame();  // Alloc stub
+    current_task = (struct task*)pmm_alloc_frame();  // Now valid because paging.h is included
     memset(current_task, 0, sizeof(struct task));
     current_task->next = current_task;
 }
 
 void scheduler_tick(struct regs *r) {
-    // Stub: Increment counter on VGA
-    static int counter = 0;
-    volatile uint16_t *video = (volatile uint16_t*)0xB8000;
-    int row3_offset = 160;  // Row 3
-    char buf[20] = "Count: ";
-    int n = 7;
-    int tmp = counter++;
-    if (tmp == 0) buf[n++] = '0';
-    while (tmp > 0) {
-        buf[n++] = '0' + (tmp % 10);
-        tmp /= 10;
-    }
-    for (int k = 0; k < n; k++) {
-        video[row3_offset + k] = buf[k] | (0x07 << 8);
-    }
+    (void)r; // Silence the "unused parameter" warning
+    tick++;
+    // Stub: Increment counter on VGA (moved to main for demo)
 }

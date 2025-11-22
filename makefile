@@ -1,11 +1,25 @@
 CC = gcc
 LD = ld
 AS = gcc
-CFLAGS = -m32 -fno-pic -fno-builtin -nostdlib -nostartfiles -nodefaultlibs -Wall -Wextra -g
+CFLAGS = -m32 -I./kernel -fno-pic -fno-builtin -nostdlib -nostartfiles -nodefaultlibs -Wall -Wextra -g
 ASFLAGS = -m32 -g -c
 LDFLAGS = -m elf_i386
 
-OBJS = build/boot.o build/kernel.o build/common.o build/idt.o build/isr.o build/pic.o build/keyboard.o build/paging.o build/disk.o build/fat.o build/scheduler.o build/shell.o build/pci.o build/nic.o
+# List of objects
+OBJS = build/boot.o \
+       build/kernel.o \
+       build/common.o \
+       build/idt.o \
+       build/isr.o \
+       build/pic.o \
+       build/keyboard.o \
+       build/paging.o \
+       build/disk.o \
+       build/fat.o \
+       build/scheduler.o \
+       build/shell.o \
+       build/pci.o \
+       build/nic.o
 
 .PHONY: all clean iso run
 
@@ -19,7 +33,7 @@ build:
 build/boot.o: boot/boot.s
 	$(AS) $(ASFLAGS) -o $@ $<
 
-# Compile kernel files
+# Compile C files
 build/kernel.o: kernel/main.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -63,19 +77,21 @@ build/nic.o: kernel/nic.c
 build/kernel.bin: $(OBJS) linker.ld
 	$(LD) $(LDFLAGS) -T linker.ld -o $@ $(OBJS)
 
-# Copy to ISO dir
+# Create ISO Structure
 iso: build/kernel.bin
 	cp build/kernel.bin iso/boot/kernel.bin
 	cp grub/grub.cfg iso/boot/grub/grub.cfg
-	# Add sample file for FAT test
-	echo "Hello from file!" > iso/boot/hello.txt
+	# Create a dummy config file (all zeros) for first boot detection
+	dd if=/dev/zero of=iso/boot/config.cfg bs=512 count=1
+	echo "Welcome to the filesystem!" > iso/boot/hello.txt
 
-# Create ISO
+# Generate ISO
 bengaltiger.iso: iso
 	grub-mkrescue -o bengaltiger.iso iso
 
+# Run QEMU with FAT emulation on the boot folder
 run: bengaltiger.iso
-	qemu-system-i386 -cdrom bengaltiger.iso -m 512M
+	qemu-system-i386 -cdrom bengaltiger.iso -m 512M -drive file=fat:rw:iso/boot,format=raw
 
 clean:
 	rm -rf build iso bengaltiger.iso

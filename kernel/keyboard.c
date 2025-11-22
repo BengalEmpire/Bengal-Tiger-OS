@@ -1,8 +1,6 @@
-// kernel/keyboard.c
-
 #include "keyboard.h"
 #include "common.h"
-#include "shell.h"  // For shell_handler
+#include "shell.h"
 
 static char scan_to_ascii[128] = {
     0, 27, '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', '\b',
@@ -20,7 +18,7 @@ void keyboard_handler() {
     } else {
         char ch = scan_to_ascii[scancode];
         if (ch) {
-            shell_handler(ch);  // Pass to shell
+            shell_handler(ch);
         }
     }
 }
