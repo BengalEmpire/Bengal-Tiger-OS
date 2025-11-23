@@ -7,8 +7,6 @@ Bengal Tiger OS is an enhanced prototype of a 32-bit hobby operating system. It 
 - **First-Time Setup**: On first boot, prompts for username and saves it to a config sector (persistent if disk allows write).
 - **Shell Enhancements**: Username in prompt (e.g., `user@bengal-tiger:~$`), added commands: `echo <msg>`, `clear`, `exit`.
 - **Persistence Hack**: Uses fixed sector 2 for config.cfg (not full FAT write).
-- **Note on Animated Logo**: You mentioned converting .mp4 to PNG to .raw. For this text-mode OS, I used ASCII art animation. For graphical animation, you'd need to add VESA/framebuffer support (advanced; see Roadmap). If you have .raw files, integrate them into a graphics mode function in main.c.
-
 ## Build Instructions
 
 ### Linux (Debian/Ubuntu)
