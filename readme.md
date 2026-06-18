@@ -8,7 +8,7 @@
 ██████╔╝███████╗██║ ╚████║╚██████╔╝██║  ██║███████╗       
 ╚═════╝ ╚══════╝╚═╝  ╚═══╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝       
                                                           
-████████╗██╗ ██████╗ ███████╗██████╗      ██████╗ ███████╗
+████████╗██╗ ██████╗ ███████╗██████╗     ██████╗ ███████╗
 ╚══██╔══╝██║██╔════╝ ██╔════╝██╔══██╗    ██╔═══██╗██╔════╝
    ██║   ██║██║  ███╗█████╗  ██████╔╝    ██║   ██║███████╗
    ██║   ██║██║   ██║██╔══╝  ██╔══██╗    ██║   ██║╚════██║
@@ -16,39 +16,36 @@
    ╚═╝   ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝     ╚═════╝ ╚══════╝
 ```
 
-**Bengal Tiger OS** is a 32-bit hobby operating system written in C and x86 assembly, engineered for booting on real x86 hardware. It boots via GRUB with a full Multiboot-compliant kernel, features a colorful terminal shell, hardware drivers, and a robust initialization pipeline. This OS is designed for learning OS development and provides a production-quality foundation.
+**Bengal Tiger OS** is a 32-bit hobby operating system written in C and x86 assembly, engineered for booting on real x86 hardware. It boots via GRUB with a full Multiboot-compliant kernel, features a colorful terminal shell, hardware drivers, VESA framebuffer graphics, and a robust initialization pipeline. This OS is designed for learning OS development and provides a production-quality foundation.
 
 ---
 
-## ✨ New in Version 0.4.0 — "Real Hardware Ready"
+## ✨ New in Version 0.5.0 — "Graphics Mode"
 
-### 🖥️ Real Hardware Boot Stability
-- **A20 Gate** — Ensures access to memory above 1MB via fast gate & keyboard controller fallback
-- **Own GDT** — Flat 32-bit model, no longer depends on GRUB's temporary GDT
-- **Stack Initialization** — Explicit ESP setup in `boot.s`, no reliance on GRUB's stack
-- **CPUID Detection** — Queries CPU vendor, brand string, feature flags
-- **FPU/SSE Init** — Initializes x87 FPU, enables SSE/SSE2 when available
-- **Full Memory Map** — Parses Multiboot E820 memory map instead of just `mem_upper`
-- **Dynamic Page Tables** — Page dir/table allocated after kernel BSS (not hardcoded `0x9C000`)
+### 🎨 VBE Framebuffer Graphics
+- **VESA Linear Framebuffer** — High-resolution graphics via GRUB's `gfxpayload`
+- **Multiple Resolutions** — 1024×768×32, 800×600×32, 1280×1024×32
+- **Pixel Drawing** — `vbe_putpixel()`, `vbe_fill_rect()`, `vbe_draw_rect()`, lines
+- **Text Rendering** — 8×16 bitmap font with word wrap and newline support
+- **Screen Management** — Clear, scroll, color fills
+- **16 VGA Colors** — Pre-mapped to 32-bit RGBA
 
-### 🕒 New Drivers
-| Driver | Description |
-|--------|-------------|
-| **RTC (CMOS)** | Real-Time Clock for actual date/time display |
-| **Serial (COM1)** | 16550 UART debug output at 115200 baud |
-| **Enhanced ATA** | IDENTIFY command, model/serial/firmware read, ATAPI detection, LBA48 |
-| **ACPI Shutdown** | Multiple reset/shutdown methods for real HW |
-
-### 🐚 New Shell Commands
+### 🐚 New Shell Command
 | Command | Description |
 |---------|-------------|
-| `date` | Show real date and time from RTC |
-| `disk` | Display ATA drive model, serial, capacity |
-| `cpu` | Show CPU vendor, brand, features |
+| `vbe` | Show framebuffer info + draw a demo pattern (color bars, border, text) |
 
-### 🔄 Improved Commands
-- `reboot` — Keyboard controller + ACPI + triple fault fallback
-- `shutdown` — QEMU + VirtualBox + Bochs ACPI methods
+### 📋 Updated Features
+- `neofetch` now shows graphics resolution when VBE is active
+- 5 GRUB boot entries: text mode + 3 graphics modes + debug
+
+### 📁 New Files
+| File | Description |
+|------|-------------|
+| `kernel/vbe.h` | VBE framebuffer types and drawing API |
+| `kernel/vbe.c` | VBE init, pixel/rect/text rendering, paging mapping |
+| `kernel/font.h` | 8×16 bitmap font header |
+| `kernel/font.c` | 8×16 bitmap font data (95 ASCII characters) |
 
 ---
 
@@ -57,8 +54,8 @@
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                      USER SHELL                               │
-│  Commands: help, neofetch, pci, mem, uptime, date, disk     │
-│           cpu, echo, clear, color, history, reboot, shutdown │
+│  Commands: help, neofetch, pci, mem, uptime, date, disk,    │
+│           cpu, vbe, echo, clear, color, history, reboot,...  │
 ├─────────────────────────────────────────────────────────────┤
 │                    KERNEL SUBSYSTEMS                          │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐       │
@@ -69,6 +66,12 @@
 │  │  Timer   │ │ Keyboard │ │   Heap   │ │Scheduler │       │
 │  │  (PIT)   │ │  (PS/2)  │ │ Allocator│ │  (stub)  │       │
 │  └──────────┘ └──────────┘ └──────────┘ └──────────┘       │
+├─────────────────────────────────────────────────────────────┤
+│                    GRAPHICS LAYER                             │
+│  ┌────────────────────┐  ┌────────────────────┐             │
+│  │  VBE Framebuffer   │  │  8x16 Bitmap Font  │             │
+│  │ Pixel/Shape/Text   │  │  95 ASCII glyphs   │             │
+│  └────────────────────┘  └────────────────────┘             │
 ├─────────────────────────────────────────────────────────────┤
 │                   CPU / SYSTEM LAYER                         │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐       │
@@ -95,7 +98,7 @@ Bengal-Tiger-OS/
 ├── boot/
 │   └── boot.s              # Multiboot entry + stack init
 ├── grub/
-│   └── grub.cfg            # GRUB bootloader config
+│   └── grub.cfg            # GRUB bootloader config (with graphics mode entries)
 ├── kernel/
 │   ├── main.c              # Kernel entry point (7-phase init)
 │   ├── common.c/h          # Utility functions, types, I/O ports
@@ -114,13 +117,15 @@ Bengal-Tiger-OS/
 │   ├── serial.c/h          # 16550 UART serial driver
 │   ├── disk.c/h            # Enhanced ATA/ATAPI driver
 │   ├── fat.c/h             # FAT filesystem (stub)
+│   ├── vbe.c/h             # VBE framebuffer driver
+│   ├── font.c/h            # 8x16 bitmap font data
 │   ├── pci.c/h             # PCI bus scanner
 │   ├── nic.c/h             # Network driver (stub)
 │   ├── scheduler.c/h       # Task scheduler (stub)
 │   ├── shell.c/h           # Command-line interface
 │   └── panic.c/h           # Kernel panic handler
 ├── linker.ld               # Linker script
-├── makefile                # Build system
+├── makefile                # Build system (24 object files)
 └── docs/                   # Documentation
 ```
 
@@ -133,8 +138,8 @@ Bengal-Tiger-OS/
 ## 📖 Using Bengal Tiger OS
 
 ### Boot Process
-1. GRUB menu appears (5 second timeout)
-2. Boot log scrolls: A20 → GDT → CPU → PIC → IDT → PMM → Paging → Heap → Serial → Timer → Keyboard → RTC → ATA → FAT → Scheduler → PCI → NIC → Interrupts
+1. GRUB menu appears (5 second timeout) — select **text mode** or a **graphics mode**
+2. Boot log scrolls: A20 → GDT → CPU → PIC → IDT → PMM → Paging → Heap → VBE → Serial → Timer → Keyboard → RTC → ATA → FAT → Scheduler → PCI → NIC → Interrupts
 3. Bengal Tiger logo animation plays
 4. Enter your username (first boot) or shell prompt appears
 5. Shell prompt: `yourname@bengal-tiger:~$`
@@ -158,6 +163,7 @@ Bengal-Tiger-OS/
 | `date` | Show real date/time (RTC) |
 | `disk` | Show ATA drive information |
 | `cpu` | Show CPU vendor, brand, features |
+| `vbe` | Show VBE framebuffer info + draw demo pattern |
 
 #### Shell Commands
 | Command | Description |

@@ -28,6 +28,8 @@
 #include "panic.h"
 #include "rtc.h"
 #include "serial.h"
+#include "vbe.h"
+#include "mouse.h"
 
 /* External symbols from linker */
 extern uint32_t bss_end;
@@ -37,9 +39,10 @@ extern uint32_t bss_end;
 #define KERNEL_VERSION  "0.4.0"
 #define KERNEL_ARCH     "i386"
 
-/* Boot flags */
+/* Boot flags and framebuffer state */
 static int first_boot = 0;
 static uint32_t total_memory = 0;
+static int vbe_available = 0;
 
 /* Saved multiboot info for memory map parsing */
 static multiboot_info_t *saved_mbi = NULL;
@@ -155,6 +158,30 @@ void kmain(multiboot_info_t *mbi) {
 
     heap_init();
     boot_log("Heap", "OK");
+
+    /* VBE Framebuffer init: must be after paging so we
+     * can map the framebuffer physical address into our
+     * page tables (it's often above 4GB physical space). */
+    vbe_available = vbe_init(
+        mbi->flags,
+        mbi->framebuffer_addr,
+        mbi->framebuffer_pitch,
+        mbi->framebuffer_width,
+        mbi->framebuffer_height,
+        mbi->framebuffer_bpp,
+        mbi->framebuffer_type,
+        mbi->framebuffer_red_field_position,
+        mbi->framebuffer_red_mask_size,
+        mbi->framebuffer_green_field_position,
+        mbi->framebuffer_green_mask_size,
+        mbi->framebuffer_blue_field_position,
+        mbi->framebuffer_blue_mask_size
+    );
+    if (vbe_available) {
+        boot_log("VBE Framebuffer", "OK");
+    } else {
+        boot_log("VBE Framebuffer", "text");
+    }
     
     /* ============================================ */
     /* Phase 4: Device Drivers                     */
@@ -190,6 +217,13 @@ void kmain(multiboot_info_t *mbi) {
 
     nic_init();
     boot_log("NIC", "OK");
+    
+    mouse_init();
+    if (mouse_is_present()) {
+        boot_log("PS/2 Mouse", "OK");
+    } else {
+        boot_log("PS/2 Mouse", "WARN");
+    }
     
     /* ============================================ */
     /* Phase 5: Enable Interrupts                  */
@@ -251,6 +285,8 @@ void kmain(multiboot_info_t *mbi) {
     serial_write_str("Ready. Waiting for input...\n");
 
     while (1) {
+        /* Update mouse cursor on framebuffer if needed */
+        mouse_update_cursor();
         __asm__ volatile("hlt");
     }
 }

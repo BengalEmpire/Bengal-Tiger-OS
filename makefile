@@ -69,7 +69,12 @@ C_SOURCES += kernel/cpu.c \
 
 # C sources - Drivers
 C_SOURCES += kernel/rtc.c \
-             kernel/serial.c
+             kernel/serial.c \
+             kernel/mouse.c
+
+# C sources - Graphics / Font
+C_SOURCES += kernel/vbe.c \
+             kernel/font.c
 
 # C sources - Subsystems
 C_SOURCES += kernel/scheduler.c \
@@ -99,10 +104,13 @@ OBJS = build/boot.o \
        build/gdt.o \
        build/rtc.o \
        build/serial.o \
+       build/mouse.o \
        build/keyboard.o \
        build/timer.o \
        build/disk.o \
        build/fat.o \
+       build/vbe.o \
+       build/font.o \
        build/scheduler.o \
        build/shell.o \
        build/pci.o \
@@ -214,6 +222,10 @@ build/rtc.o: kernel/rtc.c
 build/serial.o: kernel/serial.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
+# Mouse
+build/mouse.o: kernel/mouse.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+
 # Scheduler
 build/scheduler.o: kernel/scheduler.c
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -228,6 +240,14 @@ build/pci.o: kernel/pci.c
 
 # Network driver
 build/nic.o: kernel/nic.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+# VBE framebuffer
+build/vbe.o: kernel/vbe.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+# Font data
+build/font.o: kernel/font.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 # Panic handler

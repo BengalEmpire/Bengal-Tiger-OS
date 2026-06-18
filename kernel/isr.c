@@ -13,6 +13,7 @@
 #include "keyboard.h"
 #include "timer.h"
 #include "panic.h"
+#include "mouse.h"
 
 /**
  * CPU Exception Handler
@@ -88,6 +89,7 @@ void irq_handler(struct regs *r) {
             break;
             
         case 44:  /* IRQ12 - PS/2 Mouse */
+            mouse_handler();
             break;
             
         case 45:  /* IRQ13 - FPU */

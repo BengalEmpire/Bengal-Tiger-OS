@@ -102,6 +102,8 @@ build/
 ├── timer.o              # Timer driver
 ├── disk.o               # Enhanced ATA/ATAPI disk driver
 ├── fat.o                # FAT filesystem
+├── vbe.o                # VBE framebuffer driver
+├── font.o               # 8x16 bitmap font data
 ├── scheduler.o          # Scheduler
 ├── shell.o              # Shell
 ├── pci.o                # PCI bus
@@ -206,6 +208,40 @@ Located in `boot/boot.s`, this header tells GRUB how to load the kernel:
 
 ---
 
+## GRUB Graphics Mode Configuration
+
+When running in QEMU or on real hardware with VBE-compatible graphics, the GRUB menu offers multiple boot options:
+
+```cfg
+menuentry "Bengal Tiger OS (VGA Text 80x25)" {
+    set gfxpayload=text
+    multiboot /boot/kernel.bin
+    boot
+}
+
+menuentry "Bengal Tiger OS (1024x768x32)" {
+    set gfxpayload=1024x768x32
+    multiboot /boot/kernel.bin
+    boot
+}
+
+menuentry "Bengal Tiger OS (800x600x32)" {
+    set gfxpayload=800x600x32
+    multiboot /boot/kernel.bin
+    boot
+}
+
+menuentry "Bengal Tiger OS (1280x1024x32)" {
+    set gfxpayload=1280x1024x32
+    multiboot /boot/kernel.bin
+    boot
+}
+```
+
+The `set gfxpayload` directive tells GRUB to switch to the specified VESA mode before loading the kernel. The framebuffer information is passed to the kernel via the Multiboot structure (flags bit 12).
+
+---
+
 ## Boot Initialization Order
 
 The kernel's `kmain()` follows a strict 7-phase initialization:
@@ -224,7 +260,8 @@ Phase 3: Memory Management
 ├── Memory Map Parsing (E820 from multiboot)
 ├── PMM Init (bitmap allocator)
 ├── Paging Enable (dynamic page tables)
-└── Heap Init (kmalloc/kfree)
+├── Heap Init (kmalloc/kfree)
+└── VBE Framebuffer Init (from multiboot info)
 
 Phase 4: Device Drivers
 ├── Serial (COM1 debug output)
@@ -376,6 +413,20 @@ qemu-system-i386 \
     -boot d
 ```
 
+### With Graphics Mode
+
+When running via `make run`, QEMU is launched with `-vga std` which provides standard VGA/VBE support. After booting, select a graphics mode entry from the GRUB menu (e.g., "Bengal Tiger OS (1024x768x32)") to access the VBE framebuffer.
+
+### With Serial + Graphics
+
+```bash
+qemu-system-i386 \
+    -cdrom bengaltiger.iso \
+    -m 512M \
+    -serial stdio \
+    -vga std
+```
+
 ### Additional QEMU Options
 
 | Option | Description |
@@ -446,6 +497,12 @@ sudo apt install grub-pc-bin grub-common xorriso
 - Terminal program configured for 115200 baud, 8N1
 - Check COM port base address (default COM1 = 0x3F8)
 
+**Graphics mode not working**
+- Ensure QEMU is launched with `-vga std`
+- Select a graphics mode entry from GRUB menu (not the text mode entry)
+- Verify the multiboot header has flag bit 2 set (0x04) for VBE info
+- Run `vbe` command in shell to check framebuffer status
+
 **ATA disk not detected**
 - Run `disk` command to check IDENTIFY data
 - Check ATA cable/connection on real hardware
@@ -471,12 +528,20 @@ iso/
 set timeout=5
 set default=0
 
-menuentry "Bengal Tiger OS" {
+menuentry "Bengal Tiger OS (VGA Text 80x25)" {
+    set gfxpayload=text
     multiboot /boot/kernel.bin
     boot
 }
 
-menuentry "Bengal Tiger OS (Debug Mode)" {
+menuentry "Bengal Tiger OS (1024x768x32)" {
+    set gfxpayload=1024x768x32
+    multiboot /boot/kernel.bin
+    boot
+}
+
+menuentry "Bengal Tiger OS (Debug - VGA Text)" {
+    set gfxpayload=text
     multiboot /boot/kernel.bin debug
     boot
 }
@@ -521,4 +586,4 @@ jobs:
 
 ---
 
-*This document is part of Bengal Tiger OS v0.4.0*
+*This document is part of Bengal Tiger OS v0.5.0*

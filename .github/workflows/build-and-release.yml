@@ -1,0 +1,107 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [ main, master ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    name: Build Bengal Tiger OS ISO
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            gcc-multilib \
+            grub-pc-bin \
+            grub-common \
+            xorriso \
+            make
+
+      - name: Build kernel and ISO
+        run: make all
+
+      - name: Upload ISO as build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bengaltiger-iso
+          path: bengaltiger.iso
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download built ISO
+        uses: actions/download-artifact@v4
+        with:
+          name: bengaltiger-iso
+
+      - name: Extract version from tag
+        id: get_version
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Generate release body
+        id: release_body
+        run: |
+          cat > release_body.md << 'RELEOF'
+          ## Bengal Tiger OS ${{ steps.get_version.outputs.version }}
+
+          A 32-bit hobby operating system for x86 real hardware — boots via GRUB with Multiboot support.
+
+          ### What's included
+          - Bootable ISO image — works in QEMU, VirtualBox, and on real x86 hardware
+          - Full Multiboot-compliant kernel with proper GDT, A20, CPUID, FPU/SSE init
+          - VBE framebuffer graphics (1024x768x32, 800x600x32, 1280x1024x32)
+          - PS/2 keyboard & mouse drivers
+          - ATA/ATAPI disk driver with IDENTIFY support
+          - RTC (CMOS clock), Serial port (16550 UART)
+          - VGA text shell with 30+ commands
+          - 8x16 bitmap font rendering
+
+          ### Build from source
+          ```bash
+          git clone https://github.com/${{ github.repository }}
+          cd Bengal-Tiger-OS
+          make all
+          ```
+
+          ### Run in QEMU
+          ```bash
+          make run
+          ```
+
+          ### License
+          See the [LICENSE](https://github.com/${{ github.repository }}/blob/main/licence) file.
+          RELEOF
+          echo "body<<EOF" >> $GITHUB_OUTPUT
+          cat release_body.md >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Bengal Tiger OS ${{ steps.get_version.outputs.version }}
+          body: ${{ steps.release_body.outputs.body }}
+          files: bengaltiger.iso
+          draft: false
+          prerelease: false
+          generate_release_notes: false

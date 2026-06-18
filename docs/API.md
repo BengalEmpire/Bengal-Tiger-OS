@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document provides detailed API documentation for all public functions and data structures in Bengal Tiger OS v0.4.0.
+This document provides detailed API documentation for all public functions and data structures in Bengal Tiger OS v0.5.0.
 
 ---
 
@@ -16,11 +16,13 @@ This document provides detailed API documentation for all public functions and d
 6. [RTC (rtc.h)](#rtc)
 7. [Serial (serial.h)](#serial)
 8. [Keyboard (keyboard.h)](#keyboard)
-9. [Disk (disk.h)](#disk)
-10. [Shell (shell.h)](#shell)
-11. [PCI (pci.h)](#pci)
-12. [Paging (paging.h)](#paging)
-13. [Panic (panic.h)](#panic)
+9. [VBE Framebuffer (vbe.h)](#vbe-framebuffer)
+10. [Font (font.h)](#font)
+11. [Disk (disk.h)](#disk)
+12. [Shell (shell.h)](#shell)
+13. [PCI (pci.h)](#pci)
+14. [Paging (paging.h)](#paging)
+15. [Panic (panic.h)](#panic)
 
 ---
 
@@ -720,6 +722,232 @@ Check modifier key states.
 
 ---
 
+## VBE Framebuffer
+
+**Header:** `kernel/vbe.h`
+
+Provides graphics mode support via VESA BIOS Extensions (VBE) using the linear framebuffer set up by GRUB via `gfxpayload`. Supports 24/32-bit color modes with pixel, shape, and text rendering primitives.
+
+### Framebuffer Types
+
+```c
+#define FB_TYPE_RGB        1   /* Standard RGB color */
+#define FB_TYPE_TEXT       2   /* VGA text mode */
+#define FB_TYPE_INDEXED    3   /* Indexed color */
+```
+
+### Color Constants
+
+```c
+#define VBE_BLACK       0x00000000
+#define VBE_BLUE        0x000000AA
+#define VBE_GREEN       0x0000AA00
+#define VBE_CYAN        0x0000AAAA
+#define VBE_RED         0x00AA0000
+#define VBE_MAGENTA     0x00AA00AA
+#define VBE_BROWN       0x00AA5500
+#define VBE_LIGHT_GREY  0x00AAAAAA
+#define VBE_DARK_GREY   0x00555555
+#define VBE_LIGHT_BLUE  0x005555FF
+#define VBE_LIGHT_GREEN 0x0055FF55
+#define VBE_LIGHT_CYAN  0x0055FFFF
+#define VBE_LIGHT_RED   0x00FF5555
+#define VBE_LIGHT_MAGENTA 0x00FF55FF
+#define VBE_YELLOW      0x00FFFF55
+#define VBE_WHITE       0x00FFFFFF
+```
+
+### Types
+
+#### vbe_fb_t
+```c
+typedef struct {
+    uint8_t  initialized;       /* 1 if framebuffer is active */
+    uint8_t  fb_type;           /* Framebuffer type (RGB=1, text=2, indexed=3) */
+    uint32_t width;             /* Width in pixels */
+    uint32_t height;            /* Height in pixels */
+    uint32_t pitch;             /* Bytes per scanline */
+    uint8_t  bpp;               /* Bits per pixel (24 or 32) */
+    uint32_t phys_addr;         /* Physical address of framebuffer */
+    uint32_t virt_addr;         /* Virtual address (identity-mapped) */
+    uint8_t  red_pos;           /* Red field position */
+    uint8_t  red_size;          /* Red field size */
+    uint8_t  green_pos;         /* Green field position */
+    uint8_t  green_size;        /* Green field size */
+    uint8_t  blue_pos;          /* Blue field position */
+    uint8_t  blue_size;         /* Blue field size */
+} vbe_fb_t;
+
+extern vbe_fb_t vbe_fb;
+extern uint32_t vbe_fg_color;
+extern uint32_t vbe_bg_color;
+extern const uint32_t vbe_palette[16];
+```
+
+### Functions
+
+#### vbe_init
+```c
+int vbe_init(uint32_t mbi_flags,
+             uint64_t fb_addr,
+             uint32_t fb_pitch,
+             uint32_t fb_width,
+             uint32_t fb_height,
+             uint8_t  fb_bpp,
+             uint8_t  fb_type,
+             uint8_t  red_pos, uint8_t red_size,
+             uint8_t  green_pos, uint8_t green_size,
+             uint8_t  blue_pos, uint8_t blue_size);
+```
+Initialize VBE framebuffer from Multiboot information. Must be called after paging is enabled so the framebuffer memory (which may be at high physical addresses) can be mapped.
+
+**Returns:** 1 on success, 0 if no framebuffer available
+
+---
+
+#### vbe_is_active
+```c
+int vbe_is_active(void);
+```
+Check if VBE graphics mode is active.
+
+**Returns:** 1 if framebuffer is initialized, 0 if in text mode
+
+---
+
+#### vbe_putpixel
+```c
+void vbe_putpixel(uint32_t x, uint32_t y, uint32_t color);
+```
+Draw a single pixel at (x, y) with the specified 32-bit RGBA color.
+
+---
+
+#### vbe_getpixel
+```c
+uint32_t vbe_getpixel(uint32_t x, uint32_t y);
+```
+Get the pixel color at (x, y).
+
+**Returns:** 32-bit RGBA color value
+
+---
+
+#### vbe_fill_rect
+```c
+void vbe_fill_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t color);
+```
+Fill a rectangle with a solid color. Automatically clamps to screen bounds.
+
+---
+
+#### vbe_draw_rect
+```c
+void vbe_draw_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t color, uint32_t thickness);
+```
+Draw a rectangle outline with specified line thickness.
+
+---
+
+#### vbe_draw_hline / vbe_draw_vline
+```c
+void vbe_draw_hline(uint32_t x, uint32_t y, uint32_t len, uint32_t color);
+void vbe_draw_vline(uint32_t x, uint32_t y, uint32_t len, uint32_t color);
+```
+Draw horizontal and vertical lines.
+
+---
+
+#### vbe_clear
+```c
+void vbe_clear(void);
+```
+Clear the entire screen with the current background color.
+
+---
+
+#### vbe_clear_color
+```c
+void vbe_clear_color(uint32_t color);
+```
+Clear the screen with a specific color.
+
+---
+
+#### vbe_scroll
+```c
+void vbe_scroll(uint32_t lines);
+```
+Scroll the screen up by a number of pixel lines. Exposed area is filled with background color.
+
+---
+
+#### vbe_draw_char
+```c
+void vbe_draw_char(uint32_t x, uint32_t y, char c, uint32_t fg, uint32_t bg);
+```
+Render a single character at (x, y) using the 8x16 bitmap font.
+
+---
+
+#### vbe_draw_string
+```c
+void vbe_draw_string(uint32_t x, uint32_t y, const char *str, uint32_t fg, uint32_t bg);
+```
+Render a null-terminated string at (x, y). Automatically wraps at screen width and handles `\n` newlines.
+
+---
+
+#### vbe_puts
+```c
+void vbe_puts(uint32_t x, uint32_t y, const char *str);
+```
+Render a string with the default foreground/background colors.
+
+---
+
+#### vbe_vga_to_rgb
+```c
+uint32_t vbe_vga_to_rgb(uint8_t vga_color);
+```
+Convert a VGA color index (0-15) to a 32-bit RGB value.
+
+---
+
+#### vbe_rgb
+```c
+static inline uint32_t vbe_rgb(uint8_t r, uint8_t g, uint8_t b);
+```
+Pack 8-bit RGB components into a 32-bit pixel value: `(r << 16) | (g << 8) | b`.
+
+---
+
+## Font
+
+**Header:** `kernel/font.h`
+
+Provides 8x16 bitmap font data for rendering text in graphics mode.
+
+### Constants
+
+```c
+#define FONT_WIDTH      8    /* Character width in pixels */
+#define FONT_HEIGHT     16   /* Character height in pixels */
+#define FONT_FIRST_CHAR 32   /* First printable character (space) */
+#define FONT_LAST_CHAR  126  /* Last printable character (tilde) */
+#define FONT_NUM_CHARS  95   /* Total number of characters */
+```
+
+### Data
+
+```c
+extern const uint8_t font_8x16[FONT_NUM_CHARS][FONT_HEIGHT];
+```
+
+Font bitmap data: 95 characters × 16 bytes each. Bit = 1 means foreground, Bit = 0 means background. This is the standard VGA ROM font.
+
+---
+
 ## Disk
 
 **Header:** `kernel/disk.h`
@@ -1111,4 +1339,4 @@ if (error_condition) {
 
 ---
 
-*This document is part of Bengal Tiger OS v0.4.0*
+*This document is part of Bengal Tiger OS v0.5.0*

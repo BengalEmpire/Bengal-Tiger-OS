@@ -7,59 +7,62 @@
 | 0.1.0 | - | Initial prototype, basic boot |
 | 0.2.0 | - | Shell, keyboard, first-time setup |
 | 0.3.0 | 2025-12-26 | Enhanced shell, heap, timer, PCI, docs |
-| **0.4.0** | **2026-06-18** | **Real hardware readiness: GDT, A20, CPUID, FPU, RTC, Serial, enhanced ATA** |
+| 0.4.0 | 2026-06-18 | Real hardware readiness: GDT, A20, CPUID, FPU, RTC, Serial, enhanced ATA |
+| **0.5.0** | **2026-06-18** | **VBE framebuffer graphics: 1024x768x32, pixel/text drawing, font** |
 
 ---
 
-## Current Version: 0.4.0 — "Real Hardware Ready"
+## Current Version: 0.5.0 — "Graphics Mode"
 
 ### Completed Features ✅
 
-#### Real Hardware Boot Stability
-- [x] A20 Gate Enable — Fast gate + keyboard controller fallback
-- [x] Own GDT — Flat 32-bit model, independent of GRUB
-- [x] Stack Initialization — Explicit ESP in boot.s
-- [x] CPUID Detection — Vendor, brand, family/model/stepping
-- [x] FPU Initialization — CR0 config + FNINIT
-- [x] SSE/SSE2 Support — CR4 OSFXSR/OSXMMEXCPT bits
-- [x] Full Multiboot Memory Map — E820 parsing (not just mem_upper)
-- [x] Dynamic Page Tables — After kernel BSS, not hardcoded 0x9C000
+#### VBE Framebuffer Graphics
+- [x] VBE linear framebuffer init from multiboot info (resolution, pitch, bpp, color channels)
+- [x] Framebuffer physical memory mapping via paging_map()
+- [x] Multiple resolution support: 1024x768x32, 800x600x32, 1280x1024x32
+- [x] Pixel drawing: vbe_putpixel(), vbe_getpixel()
+- [x] Shape drawing: vbe_fill_rect(), vbe_draw_rect(), vbe_draw_hline(), vbe_draw_vline()
+- [x] Screen management: vbe_clear(), vbe_clear_color(), vbe_scroll()
+- [x] Text rendering with 8x16 bitmap font (95 printable ASCII chars)
+- [x] Word wrap and newline handling in vbe_draw_string()
+- [x] 16 standard VGA colors pre-mapped to 32-bit RGBA
+- [x] Color conversion: vbe_vga_to_rgb(), vbe_rgb() inline
 
-#### New Drivers
-- [x] RTC (CMOS Real-Time Clock) — Full date/time reading
-- [x] Serial Port (16550 UART) — COM1 debug output at 115200 baud
-- [x] Enhanced ATA/ATAPI — IDENTIFY command, model/serial/firmware, LBA48
-- [x] ACPI Shutdown — Multiple VM/hardware shutdown methods
+#### GRUB Graphics Mode Support
+- [x] gfxpayload configuration in grub.cfg
+- [x] Multiple boot entries: Text, 1024x768x32, 800x600x32, 1280x1024x32
+- [x] Fallback to VGA text mode when framebuffer not available
 
 #### New Shell Commands
-- [x] `date` — Real date/time from RTC
-- [x] `disk` — ATA drive information
-- [x] `cpu` — CPU vendor, brand, features
+- [x] `vbe` — Show framebuffer info (resolution, bpp, pitch, color layout, address, size)
+- [x] `vbe` — Draw demo pattern: 16 color bars, cyan border, welcome text
+- [x] `neofetch` — Shows graphics resolution when VBE is active
 
-#### Enhanced Commands
-- [x] `reboot` — PS/2 controller + ACPI + triple fault fallback
-- [x] `shutdown` — QEMU + VirtualBox + Bochs ACPI methods
+#### New Files
+- [x] `kernel/font.h` — 8x16 bitmap font header
+- [x] `kernel/font.c` — 8x16 bitmap font data (95 characters × 16 bytes)
+- [x] `kernel/vbe.h` — VBE framebuffer types, color definitions, drawing API
+- [x] `kernel/vbe.c` — VBE init, pixel/rect/text rendering, paging mapping
+- [x] `makefile` — Added vbe.o and font.o to build
 
-#### Build System
-- [x] GNU Make based
-- [x] Bootable ISO generation
-- [x] QEMU integration
-- [x] Debug support with GDB
-- [x] Updated for 22 object files
-
-#### Documentation (v0.4.0)
-- [x] README updated with new features, architecture, 7-phase boot
-- [x] Architecture docs updated with CPU init, GDT, new drivers
-- [x] API docs updated with GDT, CPU, RTC, Serial, Disk APIs
-- [x] Build docs updated with new files, serial debug, troubleshooting
-- [x] Changelog with all v0.4.0 additions
-- [x] Roadmap updated with v0.4.0 completed items
+#### Documentation (v0.5.0)
+- [x] README updated with VBE features, architecture, commands
+- [x] Architecture docs with graphics layer section
+- [x] API docs with VBE and Font sections
+- [x] Build docs with graphics mode info and new build files
+- [x] Changelog with all v0.5.0 additions
+- [x] Roadmap updated with v0.5.0 completed items
 
 ---
 
-## Version 0.5.0 (Next Release)
+## Version 0.6.0 (Next Release)
 
 ### Priority: ★★★ High
+
+#### Double-Buffering & Cursor
+- [ ] Software double-buffer for flicker-free drawing
+- [ ] Hardware cursor management
+- [ ] Screen redraw optimization
 
 #### Real Filesystem Support
 - [ ] FAT12 filesystem driver
@@ -82,15 +85,10 @@
 
 ### Priority: ★★ Medium
 
-#### Enhanced PCI
-- [ ] Enable/disable devices
-- [ ] Configure interrupts
-- [ ] Memory-mapped I/O support
-
 #### PS/2 Mouse Driver
 - [ ] IRQ12 handler (INT 44)
 - [ ] Mouse packet parsing
-- [ ] Cursor rendering on VGA
+- [ ] Cursor rendering on framebuffer
 
 #### Keyboard Enhancements
 - [ ] Multi-scancode set support
@@ -99,7 +97,7 @@
 
 ---
 
-## Version 0.6.0
+## Version 0.7.0
 
 ### Priority: ★★★ High
 
@@ -132,40 +130,28 @@
 
 ---
 
-## Version 0.7.0
+## Version 0.8.0
 
-### Graphics
+### Enhanced PCI
+- [ ] Enable/disable devices
+- [ ] Configure interrupts
+- [ ] Memory-mapped I/O support
 
-#### VBE Support
-- [ ] VESA BIOS Extensions
-- [ ] Mode switching
-- [ ] Linear framebuffer access
-- [ ] 32-bit color modes
-
-#### Basic GUI Framework
-- [ ] Pixel drawing primitives
-- [ ] Line/rectangle/circle
-- [ ] Font rendering
+### Basic GUI Framework
+- [ ] Desktop with icons
 - [ ] Window management basics
+- [ ] Menu system
+- [ ] File manager application
+- [ ] Text editor
+- [ ] Terminal emulator
 
 ### Peripherals
-
-#### Sound
 - [ ] PC Speaker beeps
 - [ ] AC97 driver (advanced)
 
 ---
 
 ## Version 1.0.0 (Major Release)
-
-### Full GUI Desktop
-
-- [ ] Desktop with icons
-- [ ] Window manager
-- [ ] Menu system
-- [ ] File manager application
-- [ ] Text editor
-- [ ] Terminal emulator
 
 ### Networking
 
@@ -268,7 +254,8 @@ Before submitting:
 | FAT write | Uses fixed sectors | For demo only |
 | No multitasking | Single-threaded kernel | N/A for current use |
 | No DMA | ATA uses PIO mode | Slower but compatible |
+| VBE no text fallback | Can't switch back to text mode | Reboot with text entry |
 
 ---
 
-*Last updated: Bengal Tiger OS v0.4.0*
+*Last updated: Bengal Tiger OS v0.5.0*

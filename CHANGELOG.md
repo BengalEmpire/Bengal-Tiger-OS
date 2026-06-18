@@ -3,6 +3,85 @@
 All notable changes to Bengal Tiger OS will be documented in this file.
 
 
+## [0.5.0] - 2026-06-18
+
+### Added
+
+#### 🎨 VBE Framebuffer Graphics
+
+- **VBE Linear Framebuffer** — High-resolution graphics via VESA BIOS Extensions, initialized from Multiboot framebuffer info.
+  - `vbe.h/c` — `vbe_init()`, `vbe_is_active()`
+
+- **Pixel Drawing Primitives** — Full set of pixel and shape drawing functions with bounds-checking:
+  - `vbe_putpixel()` — Draw a single pixel
+  - `vbe_getpixel()` — Read pixel color
+  - `vbe_fill_rect()` — Fill rectangle with solid color
+  - `vbe_draw_rect()` — Draw rectangle outline with configurable thickness
+  - `vbe_draw_hline()` / `vbe_draw_vline()` — Draw horizontal/vertical lines
+
+- **Screen Management**:
+  - `vbe_clear()` / `vbe_clear_color()` — Clear screen with default or custom color
+  - `vbe_scroll()` — Scroll screen up by pixel lines (exposed area filled with background)
+
+- **Text Rendering with Bitmap Font**:
+  - `vbe_draw_char()` — Render single 8x16 character pixel-by-pixel
+  - `vbe_draw_string()` — Render string with word wrap and newline handling
+  - `vbe_puts()` — Render string with default colors
+  - `font.h/c` — Standard VGA ROM 8x16 bitmap font, 95 printable characters (ASCII 32-126)
+
+- **Color Constants** — 16 VGA colors pre-mapped to 32-bit RGBA:
+  - `VBE_BLACK` through `VBE_WHITE` (16 color constants)
+  - `vbe_palette[16]` — Lookup table for VGA → 32-bit conversion
+  - `vbe_vga_to_rgb()` — Convert VGA color index (0-15)
+  - `vbe_rgb()` — Inline helper to pack R,G,B components
+
+- **Framebuffer Memory Mapping** — VBE init maps the framebuffer physical pages (which may be above 3GB on real hardware) into the kernel's page tables via `paging_map()`.
+
+#### 🖥️ GRUB Graphics Mode Support
+
+- **Multiple Resolution Options** in GRUB menu:
+  - `gfxpayload=1024x768x32` — 1024×768 32-bit true color
+  - `gfxpayload=800x600x32` — 800×600 32-bit true color
+  - `gfxpayload=1280x1024x32` — 1280×1024 32-bit true color
+  - `gfxpayload=text` — Traditional VGA text mode (fallback)
+
+- **Graceful Fallback** — If no framebuffer is available (text mode boot), VBE init returns 0 and the kernel operates normally in VGA text mode.
+
+#### 🐚 New Shell Commands
+
+| Command | Description |
+|---------|-------------|
+| `vbe` | Show framebuffer info (resolution, bpp, pitch, color layout, address, size) + draw demo pattern (16 color bars, cyan border, welcome text) |
+
+- **neofetch** — Now shows `Graphics: 1024x768x32 VBE` when VBE is active
+
+### Changed
+
+- **Kernel version** updated from `0.4.0` to `0.5.0`
+- **Boot order** — VBE framebuffer initialized in Phase 3 (after paging, before serial/timer)
+- **Shell help** — Updated with `vbe` command listing
+- **makefile** — Added `build/vbe.o` and `build/font.o` (24 total object files)
+
+### New Files
+
+| File | Description |
+|------|-------------|
+| `kernel/font.h` | 8x16 bitmap font header (FONT_WIDTH, FONT_HEIGHT, FONT_NUM_CHARS) |
+| `kernel/font.c` | 8x16 bitmap font data (95 characters × 16 bytes) |
+| `kernel/vbe.h` | VBE framebuffer types (vbe_fb_t), color defines, drawing API |
+| `kernel/vbe.c` | VBE init, pixel/rect/text drawing, paging mapping |
+
+### Technical Details
+
+- **Supported Modes:** 1024×768×32, 800×600×32, 1280×1024×32 (any mode GRUB can set)
+- **Pixel Formats:** 24-bit (3 bytes/pixel) and 32-bit (4 bytes/pixel, alpha ignored)
+- **Framebuffer Pitch:** Width × bytes_per_pixel, padded to alignment as needed
+- **Font Size:** 8×16 pixels, stored as 1 bit per pixel (1520 bytes total)
+- **Memory:** Framebuffer is identity-mapped after paging is enabled
+- **QEMU:** Requires `-vga std` for VBE support (`make run` includes this flag)
+- **Real Hardware:** Requires a VBE-compatible GPU with the requested resolution
+
+
 ## [0.4.0] - 2026-06-18
 
 ### Added

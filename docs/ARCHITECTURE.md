@@ -6,20 +6,22 @@
 3. [CPU Initialization](#cpu-initialization)
 4. [Memory Management](#memory-management)
 5. [Interrupt Handling](#interrupt-handling)
-6. [Device Drivers](#device-drivers)
-7. [Shell Subsystem](#shell-subsystem)
+6. [Graphics (VBE Framebuffer)](#graphics-vbe-framebuffer)
+7. [Device Drivers](#device-drivers)
+8. [Shell Subsystem](#shell-subsystem)
 
 ---
 
 ## System Overview
 
-Bengal Tiger OS is a 32-bit protected mode operating system designed for x86 processors. It follows a monolithic kernel architecture where all kernel services run in Ring 0 (kernel mode). The OS is engineered for real hardware compatibility with proper CPU initialization, GDT setup, memory management, and device drivers.
+Bengal Tiger OS is a 32-bit protected mode operating system designed for x86 processors. It follows a monolithic kernel architecture where all kernel services run in Ring 0 (kernel mode). The OS is engineered for real hardware compatibility with proper CPU initialization, GDT setup, memory management, device drivers, and VESA framebuffer graphics support.
 
 ### Design Principles
 1. **Real Hardware First** — All code designed to work on real x86 machines, not just emulators
 2. **Simplicity** — Clear, readable code over premature optimization
 3. **Modularity** — Each subsystem is in separate files with clean interfaces
 4. **Diagnostics** — Dual output (serial + VGA) for debugging
+5. **Graphics Ready** — VBE linear framebuffer with pixel/text primitives
 
 ### Address Space Layout
 
@@ -54,6 +56,7 @@ Bengal Tiger OS is a 32-bit protected mode operating system designed for x86 pro
 │        Extended BIOS Data Area           │
 ├──────────────────────────────────────────┤ 0x000A0000
 │        VGA Buffer (0xB8000)              │
+│        VBE Framebuffer (e.g., 0xFD000000)│
 ├──────────────────────────────────────────┤ 0x0009F000
 │        Stack (temporary, before paging)  │
 ├──────────────────────────────────────────┤ 0x0009BFFF
@@ -63,6 +66,8 @@ Bengal Tiger OS is a 32-bit protected mode operating system designed for x86 pro
 ├──────────────────────────────────────────┤ 0x00000000
 ```
 
+**Note:** The VBE framebuffer physical address varies by hardware/graphics mode. On QEMU with `-vga std`, it's typically at `0xFD000000` (above 3GB). The kernel identity-maps this region after paging is enabled.
+
 ---
 
 ## Boot Process
@@ -71,8 +76,9 @@ Bengal Tiger OS is a 32-bit protected mode operating system designed for x86 pro
 1. BIOS loads GRUB from MBR
 2. GRUB reads `grub.cfg`
 3. GRUB loads `kernel.bin` to memory at 1MB
-4. GRUB passes multiboot info in EBX
-5. GRUB jumps to kernel entry point
+4. If a graphics mode is selected (e.g., `gfxpayload=1024x768x32`), GRUB sets up the VESA framebuffer
+5. GRUB passes framebuffer info in multiboot structure (flags bit 12)
+6. GRUB jumps to kernel entry point (EBX = multiboot info pointer)
 
 ### Stage 2: boot.s
 ```nasm
@@ -127,9 +133,15 @@ Phase 3: Memory Management
 ├── Paging Enable
 │   ├── Identity map first 4MB
 │   ├── Page tables allocated AFTER kernel BSS (not hardcoded)
-│   └── CR3 loaded with dynamic page directory address
-└── Heap Init
-    └── Free-list allocator at 4MB
+│   ├── CR3 loaded with dynamic page directory address
+│   └── VBE framebuffer mapped at its physical address
+├── Heap Init
+│   └── Free-list allocator at 4MB
+└── VBE Framebuffer Init (from multiboot info)
+    ├── Validates framebuffer type (RGB), bpp (24/32)
+    ├── Stores resolution, pitch, color channel layout
+    ├── Maps the framebuffer physical pages into page tables
+    └── Clears the screen to black
 
 Phase 4: Device Drivers
 ├── Serial Port (COM1, 115200 baud)
@@ -235,13 +247,15 @@ void pmm_free_frame(uint32_t addr) {
 
 ### Virtual Memory (Paging)
 
-Uses **identity mapping** (virtual = physical) for the first 4MB. The page directory and first page table are **dynamically allocated** right after the kernel's BSS section, avoiding conflicts with GRUB modules, ACPI tables, or BIOS data.
+Uses **identity mapping** (virtual = physical) for the first 4MB. The page directory and first page table are **dynamically allocated** right after the kernel's BSS section, avoiding conflicts with GRUB modules, ACPI tables, or BIOS data. The VBE framebuffer memory (which can be anywhere in physical memory, often above 3GB) is also identity-mapped when VBE is initialized.
 
 ```
 Page Directory (1024 entries × 4 bytes = 4KB) — at kernel_end
 ├── Entry 0 → Page Table 0 (maps 0-4MB)
 ├── Entry 1 → Not Present
 ├── Entry 2 → Not Present
+│   ...
+├── Entry N → Page Table N (VBE framebuffer, dynamically mapped)
 │   ...
 └── Entry 1023 → Not Present
 
@@ -365,6 +379,95 @@ IRQ Flow:
 | 12 | 44 | PS/2 Mouse |
 | 14 | 46 | Primary ATA |
 | 15 | 47 | Secondary ATA |
+
+---
+
+## Graphics (VBE Framebuffer)
+
+### Overview
+
+Bengal Tiger OS supports high-resolution graphics modes via the VESA BIOS Extensions (VBE) linear framebuffer. When the kernel boots with `gfxpayload` set in GRUB, the BIOS switches to the requested graphics mode and GRUB passes the framebuffer information in the Multiboot structure (flags bit 12).
+
+### Architecture
+
+```
+┌──────────────────────────────────────────────┐
+│               SHELL + DRAWING API              │
+│  Commands: vbe (info + demo pattern)          │
+│  neofetch shows resolution                    │
+├──────────────────────────────────────────────┤
+│            VBE FRAMEBUFFER LAYER               │
+│  ┌─────────┐ ┌─────────┐ ┌───────────────┐   │
+│  │ vbe.h/c │ │ font.h/c │ │ vbe_palette[] │   │
+│  │ Pixel   │ │ 8x16    │ │ 16 VGA colors │   │
+│  │ Drawing │ │ Bitmap  │ │ → 32-bit RGB  │   │
+│  └─────────┘ └─────────┘ └───────────────┘   │
+├──────────────────────────────────────────────┤
+│              MEMORY MANAGEMENT                  │
+│  Framebuffer mapped via paging_map()           │
+│  at its physical address (identity-mapped)      │
+├──────────────────────────────────────────────┤
+│            GRUB / BOOTLOADER                    │
+│  gfxpayload=1024x768x32 sets up VBE mode       │
+│  Multiboot info contains framebuffer fields     │
+└──────────────────────────────────────────────┘
+```
+
+### Initialization Flow
+
+```
+kmain() Phase 3 (after paging):
+1. Read mbi->flags & (1 << 12) to check framebuffer presence
+2. Read framebuffer_addr, pitch, width, height, bpp, type
+3. Read color channel positions (red, green, blue)
+4. Validate: must be RGB type, ≥24 bpp
+5. Store all info in vbe_fb global structure
+6. Identity-map each page of framebuffer memory
+7. Clear the screen to black
+```
+
+### Pixel Format
+
+The framebuffer uses the standard VESA packed-pixel layout:
+
+- **32-bit (true color):** Each pixel is 4 bytes: `[blue, green, red, reserved]` in memory. The pitch is `width * 4` (with possible padding for alignment).
+- **24-bit:** Each pixel is 3 bytes in BGR order. Less common with modern hardware.
+
+Color constants are provided as 32-bit values in `RRGGBB` format and written directly to the framebuffer.
+
+### Text Rendering
+
+The VBE subsystem includes a complete monochrome bitmap font:
+
+- **Font:** Standard VGA ROM 8×16 bitmap, 95 printable characters (ASCII 32–126)
+- **Storage:** Each glyph is 16 bytes, 1 bit per pixel (bit = 1 is foreground color)
+- **Rendering:** `vbe_draw_char()` renders a single character; `vbe_draw_string()` handles full strings with word wrap and `\n` newline support
+
+```
+Character 'A' (0x41):
+        ┌──────────────┐
+        │    ████       │  row 0: 0x7C
+        │   ██░░██      │  row 1: 0xC6
+        │  ██░░░░██     │  row 2: 0xC6
+        │  ██░░░░██     │  row 3: 0xC6
+        │  ████████     │  row 4: 0xFE
+        │  ██░░░░██     │  row 5: 0xC6
+        │  ██░░░░██     │  row 6: 0xC6
+        │  ██░░░░██     │  row 7: 0xC6
+        │  ██░░░░██     │  ...
+        └──────────────┘
+```
+
+### Capabilities
+
+| Feature | Details |
+|---------|---------|
+| Supported Modes | 1024×768×32, 800×600×32, 1280×1024×32 |
+| Pixel Formats | 24-bit and 32-bit RGBA |
+| Drawing Primitives | Pixel, fill rect, draw rect, hline, vline |
+| Text Rendering | 8×16 bitmap font, word wrap, newline |
+| Screen Management | Clear, clear color, scroll |
+| Color Conversion | VGA palette (0-15) → 32-bit RGB |
 
 ---
 
@@ -544,7 +647,7 @@ video[offset] = character | (color << 8);
 | Category | Commands |
 |----------|----------|
 | **File** | `ls`, `cat <file>` |
-| **System** | `info`, `neofetch`, `uptime`, `mem`, `pci`, `date`, `disk`, `cpu` |
+| **System** | `info`, `neofetch`, `uptime`, `mem`, `pci`, `date`, `disk`, `cpu`, `vbe` |
 | **Shell** | `help`, `echo`, `clear`, `color`, `history` |
 | **Control** | `reboot`, `shutdown`, `exit` |
 
@@ -625,6 +728,30 @@ void serial_write_hex(uint16_t port, uint32_t val);
 void serial_write_int(uint16_t port, int32_t val);
 ```
 
+### vbe.h
+```c
+int vbe_init(uint32_t mbi_flags, uint64_t fb_addr,
+             uint32_t fb_pitch, uint32_t fb_width,
+             uint32_t fb_height, uint8_t fb_bpp, uint8_t fb_type,
+             uint8_t red_pos, uint8_t red_size,
+             uint8_t green_pos, uint8_t green_size,
+             uint8_t blue_pos, uint8_t blue_size);
+int vbe_is_active(void);
+void vbe_putpixel(uint32_t x, uint32_t y, uint32_t color);
+uint32_t vbe_getpixel(uint32_t x, uint32_t y);
+void vbe_fill_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t color);
+void vbe_draw_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t color, uint32_t thickness);
+void vbe_draw_hline(uint32_t x, uint32_t y, uint32_t len, uint32_t color);
+void vbe_draw_vline(uint32_t x, uint32_t y, uint32_t len, uint32_t color);
+void vbe_clear(void);
+void vbe_clear_color(uint32_t color);
+void vbe_scroll(uint32_t lines);
+void vbe_draw_char(uint32_t x, uint32_t y, char c, uint32_t fg, uint32_t bg);
+void vbe_draw_string(uint32_t x, uint32_t y, const char *str, uint32_t fg, uint32_t bg);
+void vbe_puts(uint32_t x, uint32_t y, const char *str);
+uint32_t vbe_vga_to_rgb(uint8_t vga_color);
+```
+
 ### shell.h
 ```c
 void shell_init(const char *username);
@@ -680,4 +807,4 @@ void kernel_panic_at(const char *message, const char *file, int line);
 
 ---
 
-*This document is part of Bengal Tiger OS v0.4.0*
+*This document is part of Bengal Tiger OS v0.5.0*

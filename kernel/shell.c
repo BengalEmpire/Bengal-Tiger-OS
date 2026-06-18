@@ -19,6 +19,8 @@
 #include "cpu.h"
 #include "serial.h"
 #include "disk.h"
+#include "vbe.h"
+#include "mouse.h"
 
 /* Shell state */
 char shell_cmd_buf[SHELL_CMD_MAX_LENGTH];
@@ -220,6 +222,8 @@ static void cmd_help(void) {
     shell_print_color("\nHardware Commands:\n", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
     shell_print("  disk          - Show disk info\n");
     shell_print("  cpu           - Show CPU information\n");
+    shell_print("  vbe           - Show VBE framebuffer info & demo\n");
+    shell_print("  mouse         - Show mouse status & test cursor\n");
 
     shell_print_color("\nTips:\n", make_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK));
     shell_print("  * Use UP/DOWN arrows for command history\n");
@@ -287,6 +291,19 @@ static void cmd_neofetch(void) {
     shell_print_int(pci_get_device_count());
     shell_print("\n");
     
+    /* If VBE is active, also show graphics mode info in neofetch */
+    if (vbe_is_active()) {
+        shell_print_color("    |_____|", make_color(VGA_COLOR_BROWN, VGA_COLOR_BLACK));
+        shell_print_color("                Graphics", make_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK));
+        shell_print(": ");
+        shell_print_int(vbe_fb.width);
+        shell_print("x");
+        shell_print_int(vbe_fb.height);
+        shell_print("x");
+        shell_print_int(vbe_fb.bpp);
+        shell_print(" VBE\n");
+    }
+
     /* Color blocks */
     shell_print("\n                            ");
     for (int i = 0; i < 8; i++) {
@@ -584,6 +601,104 @@ void shell_execute_command(const char *cmd) {
             shell_print("\n\n");
         } else {
             shell_print("\nNo ATA disk detected.\n\n");
+        }
+    } else if (strcmp(command, "mouse") == 0) {
+        if (mouse_is_present()) {
+            shell_print_color("\n=== PS/2 Mouse ===\n", make_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK));
+            shell_print_color("Status: ", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+            shell_print("Present\n");
+            shell_print_color("Type:   ", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+            shell_print(mouse_state.has_wheel ? "Wheel Mouse (4-byte)" : "Standard Mouse (3-byte)");
+            shell_print("\n");
+            shell_print_color("X:      ", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+            shell_print_int(mouse_get_x());
+            shell_print("\n");
+            shell_print_color("Y:      ", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+            shell_print_int(mouse_get_y());
+            shell_print("\n");
+            shell_print_color("Btns:   ", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+            uint8_t btns = mouse_get_buttons();
+            shell_print(btns & MOUSE_BTN_LEFT ? "L" : "-");
+            shell_print(btns & MOUSE_BTN_MIDDLE ? "M" : "-");
+            shell_print(btns & MOUSE_BTN_RIGHT ? "R" : "-");
+            shell_print("\n");
+            if (vbe_is_active()) {
+                shell_print("\nCursor visible on framebuffer. Move the mouse!\n");
+            } else {
+                shell_print("\nSwitch to graphics mode (VBE) to see the cursor.\n");
+            }
+            shell_print("\n");
+        } else {
+            shell_print("\nNo PS/2 mouse detected.\n");
+            shell_print("Ensure PS/2 mouse is connected and IRQ12 is unmasked.\n\n");
+        }
+    } else if (strcmp(command, "vbe") == 0) {
+        if (vbe_is_active()) {
+            shell_print_color("\n=== VBE Framebuffer ===\n", make_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK));
+            shell_print_color("Mode:     ", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+            shell_print_int(vbe_fb.width);
+            shell_print("x");
+            shell_print_int(vbe_fb.height);
+            shell_print("x");
+            shell_print_int(vbe_fb.bpp);
+            shell_print("\n");
+            shell_print_color("Pitch:    ", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+            shell_print_int(vbe_fb.pitch);
+            shell_print(" bytes\n");
+            shell_print_color("FB Addr:  ", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+            shell_print_hex(vbe_fb.phys_addr);
+            shell_print("\n");
+            shell_print_color("Red:      ", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+            shell_print_int(vbe_fb.red_size);
+            shell_print(" bits at pos ");
+            shell_print_int(vbe_fb.red_pos);
+            shell_print("\n");
+            shell_print_color("Green:    ", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+            shell_print_int(vbe_fb.green_size);
+            shell_print(" bits at pos ");
+            shell_print_int(vbe_fb.green_pos);
+            shell_print("\n");
+            shell_print_color("Blue:     ", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+            shell_print_int(vbe_fb.blue_size);
+            shell_print(" bits at pos ");
+            shell_print_int(vbe_fb.blue_pos);
+            shell_print("\n");
+            shell_print_color("FB Size:  ", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+            uint32_t fb_mb = (vbe_fb.pitch * vbe_fb.height) / (1024 * 1024);
+            if (fb_mb > 0) {
+                shell_print_int(fb_mb);
+                shell_print(" MB\n");
+            } else {
+                shell_print_int((vbe_fb.pitch * vbe_fb.height) / 1024);
+                shell_print(" KB\n");
+            }
+
+            /* Draw a demo pattern on the framebuffer */
+            shell_print_color("\nDrawing demo pattern...\n", make_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK));
+
+            /* Color bars across top */
+            uint32_t bar_w = vbe_fb.width / 16;
+            uint32_t bar_h = 48;
+            for (int i = 0; i < 16 && i * bar_w < vbe_fb.width; i++) {
+                vbe_fill_rect(i * bar_w, 0, bar_w, bar_h, vbe_palette[i]);
+            }
+
+            /* Draw a cyan border rectangle */
+            vbe_draw_rect(0, 0, vbe_fb.width - 1, vbe_fb.height - 1, VBE_CYAN, 3);
+
+            /* Draw some text in the framebuffer */
+            uint32_t tx = 20;
+            uint32_t ty = bar_h + 12;
+            vbe_draw_string(tx, ty, "Bengal Tiger OS - Graphics Mode Active!", VBE_YELLOW, VBE_BLACK);
+            ty += 20;
+            vbe_draw_string(tx, ty, "Resolution: 1024x768 @ 32bpp", VBE_LIGHT_CYAN, VBE_BLACK);
+            ty += 20;
+            vbe_draw_string(tx, ty, "Try: vbe, vbe demo, vbe clear", VBE_LIGHT_GREEN, VBE_BLACK);
+
+            shell_print("Done! The framebuffer now has color bars and text.\n\n");
+        } else {
+            shell_print("\nVBE framebuffer is not active.\n");
+            shell_print("Boot using a graphics mode entry in GRUB (e.g., '1024x768x32').\n\n");
         }
     } else if (strcmp(command, "cpu") == 0) {
         shell_print_color("\n=== CPU Information ===\n", make_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK));
