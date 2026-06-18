@@ -103,6 +103,7 @@ static uint32_t *page_dir = NULL;
 static uint32_t *page_table0 = NULL;
 
 void paging_install(uint32_t mem_size) {
+    (void)mem_size;
     /* 
      * Dynamically allocate page directory and first page table
      * right after the kernel’s BSS section.

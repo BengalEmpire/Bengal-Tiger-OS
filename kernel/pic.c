@@ -19,6 +19,8 @@ void pic_remap(void) {
     /* Save current masks */
     uint8_t mask1 = inb(PIC1_DATA);
     uint8_t mask2 = inb(PIC2_DATA);
+    (void)mask1;
+    (void)mask2;
     
     /* ICW1: Start initialization sequence */
     outb(PIC1_COMMAND, ICW1_INIT | ICW1_ICW4);

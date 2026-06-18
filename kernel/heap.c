@@ -19,7 +19,6 @@ static heap_block_t *heap_head = NULL;
 
 /* Heap bounds */
 static uint32_t heap_start = HEAP_START;
-static uint32_t heap_end = HEAP_START + HEAP_INITIAL_SIZE;
 
 /* Minimum block size to prevent excessive fragmentation */
 #define MIN_BLOCK_SIZE 16

@@ -7,6 +7,7 @@
  */
 
 #include "mouse.h"
+#include "pic.h"
 #include "vbe.h"
 #include "common.h"
 
@@ -332,7 +333,6 @@ void mouse_draw_cursor(void) {
     /* Draw cursor pixels */
     uint32_t outline_color = VBE_WHITE;
     uint32_t fill_color    = VBE_BLACK;
-    uint32_t outline2_color = VBE_BLACK;  /* Second outline for contrast */
 
     for (int32_t row = 0; row < MOUSE_CURSOR_HEIGHT; row++) {
         int32_t draw_y = y + row;
