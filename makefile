@@ -63,6 +63,14 @@ C_SOURCES += kernel/keyboard.c \
              kernel/pci.c \
              kernel/nic.c
 
+# C sources - CPU / System
+C_SOURCES += kernel/cpu.c \
+             kernel/gdt.c
+
+# C sources - Drivers
+C_SOURCES += kernel/rtc.c \
+             kernel/serial.c
+
 # C sources - Subsystems
 C_SOURCES += kernel/scheduler.c \
              kernel/shell.c \
@@ -87,6 +95,10 @@ OBJS = build/boot.o \
        build/pic.o \
        build/paging.o \
        build/heap.o \
+       build/cpu.o \
+       build/gdt.o \
+       build/rtc.o \
+       build/serial.o \
        build/keyboard.o \
        build/timer.o \
        build/disk.o \
@@ -184,6 +196,22 @@ build/disk.o: kernel/disk.c
 
 # FAT filesystem
 build/fat.o: kernel/fat.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+# CPU init
+build/cpu.o: kernel/cpu.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+# GDT
+build/gdt.o: kernel/gdt.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+# RTC
+build/rtc.o: kernel/rtc.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+# Serial
+build/serial.o: kernel/serial.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 # Scheduler

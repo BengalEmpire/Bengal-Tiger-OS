@@ -94,9 +94,13 @@ build/
 ├── pic.o                # PIC driver
 ├── paging.o             # Virtual memory
 ├── heap.o               # Memory allocator
+├── cpu.o                # CPU initialization (A20, CPUID, FPU, SSE)
+├── gdt.o                # Global Descriptor Table
+├── rtc.o                # CMOS Real-Time Clock driver
+├── serial.o             # 16550 UART serial driver
 ├── keyboard.o           # Keyboard driver
 ├── timer.o              # Timer driver
-├── disk.o               # Disk driver
+├── disk.o               # Enhanced ATA/ATAPI disk driver
 ├── fat.o                # FAT filesystem
 ├── scheduler.o          # Scheduler
 ├── shell.o              # Shell
@@ -202,6 +206,46 @@ Located in `boot/boot.s`, this header tells GRUB how to load the kernel:
 
 ---
 
+## Boot Initialization Order
+
+The kernel's `kmain()` follows a strict 7-phase initialization:
+
+```
+Phase 1: CPU Initialization
+├── A20 Gate Enable (memory above 1MB)
+├── GDT Setup (own descriptors, not GRUB's)
+└── CPUID/FPU/SSE Detection & Init
+
+Phase 2: Critical Hardware
+├── PIC Remap (IRQ 0-15 → INT 32-47)
+└── IDT Install (256 gates)
+
+Phase 3: Memory Management
+├── Memory Map Parsing (E820 from multiboot)
+├── PMM Init (bitmap allocator)
+├── Paging Enable (dynamic page tables)
+└── Heap Init (kmalloc/kfree)
+
+Phase 4: Device Drivers
+├── Serial (COM1 debug output)
+├── Timer (PIT at 100Hz)
+├── Keyboard (PS/2)
+├── RTC (CMOS clock)
+├── ATA Disk (IDENTIFY + PIO)
+├── FAT Filesystem
+├── Scheduler
+├── PCI Scanner
+└── NIC
+
+Phase 5: Enable Interrupts (STI)
+
+Phase 6: User Setup (config → shell)
+
+Phase 7: Idle Loop (HLT)
+```
+
+---
+
 ## Adding New Source Files
 
 ### Step 1: Create the source file
@@ -239,6 +283,13 @@ void kmain(...) {
     ...
 }
 ```
+
+### Step 4: Update documentation
+
+- Update `CHANGELOG.md` with new feature details
+- Add API section to `docs/API.md`
+- Update project structure in `readme.md`
+- Update roadmap in `docs/ROADMAP.md`
 
 ---
 
@@ -291,8 +342,8 @@ disas kmain
 (gdb) continue
 Breakpoint 1, kmain () at kernel/main.c:42
 (gdb) next
-(gdb) print mbi->mem_upper
-$1 = 130048
+(gdb) print mbi->flags
+$1 = 4096
 (gdb) continue
 ```
 
@@ -304,6 +355,15 @@ $1 = 130048
 
 ```bash
 qemu-system-i386 -cdrom bengaltiger.iso -m 512M
+```
+
+### With Serial Debug Output
+
+```bash
+qemu-system-i386 \
+    -cdrom bengaltiger.iso \
+    -m 512M \
+    -serial stdio
 ```
 
 ### With FAT Disk for Persistence
@@ -321,12 +381,24 @@ qemu-system-i386 \
 | Option | Description |
 |--------|-------------|
 | `-m 512M` | 512MB memory |
-| `-serial stdio` | Serial output to terminal |
+| `-serial stdio` | Serial output to terminal (115200 baud) |
 | `-d int` | Log interrupts |
 | `-no-reboot` | Don't reboot on triple fault |
 | `-monitor stdio` | QEMU monitor commands |
 | `-s` | Enable GDB server on :1234 |
 | `-S` | Start paused (wait for GDB) |
+
+### Debug via Serial
+
+Connect to COM1 at 115200 baud, 8N1 to see kernel boot logs in real time:
+
+```bash
+# QEMU
+qemu-system-i386 -cdrom bengaltiger.iso -serial stdio
+
+# On real hardware, use a null-modem cable and terminal program:
+screen /dev/ttyS0 115200
+```
 
 ---
 
@@ -362,11 +434,22 @@ sudo apt install grub-pc-bin grub-common xorriso
 - Enable QEMU int logging: `-d int`
 - Check for null pointer dereferences
 - Verify GDT/IDT setup
+- Check A20 gate is enabled
 
 **No keyboard input**
 - Verify IRQ1 handler in IDT
 - Check PIC initialization
 - Verify keyboard port 0x60 read
+
+**No serial output**
+- Ensure QEMU is launched with `-serial stdio`
+- Terminal program configured for 115200 baud, 8N1
+- Check COM port base address (default COM1 = 0x3F8)
+
+**ATA disk not detected**
+- Run `disk` command to check IDENTIFY data
+- Check ATA cable/connection on real hardware
+- Verify disk is powered on
 
 ---
 
@@ -391,6 +474,15 @@ set default=0
 menuentry "Bengal Tiger OS" {
     multiboot /boot/kernel.bin
     boot
+}
+
+menuentry "Bengal Tiger OS (Debug Mode)" {
+    multiboot /boot/kernel.bin debug
+    boot
+}
+
+menuentry "Halt System" {
+    halt
 }
 ```
 
@@ -429,4 +521,4 @@ jobs:
 
 ---
 
-*This document is part of Bengal Tiger OS v0.3.0*
+*This document is part of Bengal Tiger OS v0.4.0*

@@ -2,20 +2,25 @@
 
 ## Overview
 
-This document provides detailed API documentation for all public functions and data structures in Bengal Tiger OS.
+This document provides detailed API documentation for all public functions and data structures in Bengal Tiger OS v0.4.0.
 
 ---
 
 ## Table of Contents
 
 1. [Common Utilities (common.h)](#common-utilities)
-2. [Heap Allocator (heap.h)](#heap-allocator)
-3. [Timer (timer.h)](#timer)
-4. [Keyboard (keyboard.h)](#keyboard)
-5. [Shell (shell.h)](#shell)
-6. [PCI (pci.h)](#pci)
-7. [Paging (paging.h)](#paging)
-8. [Panic (panic.h)](#panic)
+2. [GDT (gdt.h)](#gdt)
+3. [CPU (cpu.h)](#cpu)
+4. [Heap Allocator (heap.h)](#heap-allocator)
+5. [Timer (timer.h)](#timer)
+6. [RTC (rtc.h)](#rtc)
+7. [Serial (serial.h)](#serial)
+8. [Keyboard (keyboard.h)](#keyboard)
+9. [Disk (disk.h)](#disk)
+10. [Shell (shell.h)](#shell)
+11. [PCI (pci.h)](#pci)
+12. [Paging (paging.h)](#paging)
+13. [Panic (panic.h)](#panic)
 
 ---
 
@@ -64,6 +69,16 @@ Write a 16-bit word to an I/O port.
 
 ---
 
+#### outl
+```c
+void outl(uint16_t port, uint32_t val);
+```
+Write a 32-bit double-word to an I/O port.
+
+**Used for:** PCI configuration space access (ports 0xCF8/0xCFC).
+
+---
+
 #### inb
 ```c
 uint8_t inb(uint16_t port);
@@ -87,13 +102,21 @@ Read a 16-bit word from an I/O port.
 
 ---
 
+#### inl
+```c
+uint32_t inl(uint16_t port);
+```
+Read a 32-bit double-word from an I/O port.
+
+---
+
 ### Memory Functions
 
 #### memset
 ```c
 void memset(void *dest, uint8_t val, uint32_t len);
 ```
-Fill memory region with a byte value.
+Fill memory region with a byte value. Optimized for 32-bit aligned writes.
 
 **Parameters:**
 - `dest` - Pointer to memory region
@@ -112,7 +135,7 @@ memset(buffer, 0, sizeof(buffer));  // Zero out buffer
 ```c
 void memcpy(void *dest, const void *src, uint32_t len);
 ```
-Copy memory from source to destination. Handles overlapping regions safely.
+Copy memory from source to destination. Handles overlapping regions safely (backwards copy if dest > src).
 
 **Parameters:**
 - `dest` - Destination pointer
@@ -210,6 +233,103 @@ Copy up to n characters. Pads with null bytes if src is shorter.
 
 ---
 
+## GDT
+
+**Header:** `kernel/gdt.h`
+
+Provides a flat 32-bit protected mode memory model independent of GRUB's GDT.
+
+### Segment Selectors
+
+```c
+#define GDT_NULL_SEG     0x00  /* Null descriptor (required) */
+#define GDT_KERNEL_CODE  0x08  /* Kernel code segment (Ring 0) */
+#define GDT_KERNEL_DATA  0x10  /* Kernel data segment (Ring 0) */
+```
+
+### Types
+
+#### gdt_entry_t
+```c
+typedef struct {
+    uint16_t limit_low;     /* Lower 16 bits of segment limit */
+    uint16_t base_low;      /* Lower 16 bits of base address */
+    uint8_t  base_mid;      /* Next 8 bits of base address */
+    uint8_t  access;        /* Access flags (present, ring, type) */
+    uint8_t  granularity;   /* Granularity flags + upper 4 bits of limit */
+    uint8_t  base_high;     /* Upper 8 bits of base address */
+} __attribute__((packed)) gdt_entry_t;
+```
+
+### Functions
+
+#### gdt_init
+```c
+void gdt_init(void);
+```
+Initialize and load the Global Descriptor Table. Creates three entries (null, code, data), loads GDTR via `lgdt`, reloads all data segment registers, and performs a far jump to reload CS. Must be called early in kmain() before any interrupt or paging initialization.
+
+---
+
+## CPU
+
+**Header:** `kernel/cpu.h`
+
+### Global State
+
+```c
+extern cpu_info_t cpu_info;
+```
+
+#### cpu_info_t
+```c
+typedef struct {
+    char vendor[13];            // CPU vendor (e.g., "GenuineIntel")
+    char brand[49];             // CPU brand string
+    uint32_t family;            // CPU family
+    uint32_t model;             // CPU model
+    uint32_t stepping;          // CPU stepping
+    uint32_t features_ecx;      // ECX feature flags
+    uint32_t features_edx;      // EDX feature flags
+    uint8_t has_cpuid : 1;      // CPUID available
+    uint8_t has_fpu   : 1;      // x87 FPU present
+    uint8_t has_sse   : 1;      // SSE supported
+    uint8_t has_sse2  : 1;      // SSE2 supported
+    uint8_t has_msr   : 1;      // RDMSR/WRMSR supported
+    uint8_t has_apic  : 1;      // Local APIC present
+} cpu_info_t;
+```
+
+### Functions
+
+#### cpu_init
+```c
+void cpu_init(void);
+```
+Full CPU initialization: enables A20 gate, detects CPUID, queries features, initializes FPU, enables SSE/SSE2.
+
+#### a20_enable
+```c
+int a20_enable(void);
+```
+Enable the A20 gate. Tries fast gate (port 0x92) first, then keyboard controller method. Verifies with memory wrap test.
+
+**Returns:** 1 if A20 enabled, 0 on failure
+
+#### cpu_get_vendor
+```c
+const char* cpu_get_vendor(void);
+```
+**Returns:** CPU vendor string (e.g., "GenuineIntel", "AuthenticAMD")
+
+#### cpu_get_brand
+```c
+const char* cpu_get_brand(void);
+```
+**Returns:** Full CPU brand string (e.g., "Intel(R) Core(TM) i7-8700K CPU @ 3.70GHz")
+
+---
+
 ## Heap Allocator
 
 **Header:** `kernel/heap.h`
@@ -276,18 +396,6 @@ Allocate zeroed memory.
 
 ---
 
-#### kmalloc_aligned
-```c
-void *kmalloc_aligned(uint32_t size, uint32_t alignment);
-```
-Allocate memory with specific alignment.
-
-**Parameters:**
-- `size` - Number of bytes
-- `alignment` - Alignment requirement (must be power of 2)
-
----
-
 #### kfree
 ```c
 void kfree(void *ptr);
@@ -297,19 +405,7 @@ Free previously allocated memory.
 **Parameters:**
 - `ptr` - Pointer from kmalloc (NULL is safe)
 
-**Note:** Double-free is detected and ignored.
-
----
-
-#### krealloc
-```c
-void *krealloc(void *ptr, uint32_t new_size);
-```
-Resize an allocation.
-
-**Special cases:**
-- `ptr == NULL` → behaves like kmalloc(new_size)
-- `new_size == 0` → behaves like kfree(ptr)
+**Note:** Double-free is detected via magic number validation and ignored.
 
 ---
 
@@ -332,7 +428,7 @@ printf("Used: %d bytes\n", stats.used_size);
 ```c
 int heap_check(void);
 ```
-Verify heap integrity.
+Verify heap integrity by checking magic numbers in all blocks.
 
 **Returns:**
 - `1` if heap is valid
@@ -389,14 +485,6 @@ Get total seconds since boot.
 
 ---
 
-#### timer_get_ms
-```c
-uint32_t timer_get_ms(void);
-```
-Get total milliseconds since boot (may wrap).
-
----
-
 #### sleep_ms
 ```c
 void sleep_ms(uint32_t ms);
@@ -426,6 +514,134 @@ Format uptime as "HH:MM:SS" or "Nd HH:MM:SS" string.
 
 **Parameters:**
 - `buffer` - Output buffer (at least 32 bytes)
+
+---
+
+## RTC
+
+**Header:** `kernel/rtc.h`
+
+Provides access to the CMOS Real-Time Clock for reading current date and time.
+
+### Types
+
+#### rtc_time_t
+```c
+typedef struct {
+    uint8_t seconds;     // 0-59
+    uint8_t minutes;     // 0-59
+    uint8_t hours;       // 0-23
+    uint8_t day;         // 1-31
+    uint8_t month;       // 1-12
+    uint16_t year;       // Full year (e.g., 2026)
+    uint8_t weekday;     // 1=Sunday, 7=Saturday
+} rtc_time_t;
+```
+
+### Functions
+
+#### rtc_init
+```c
+void rtc_init(void);
+```
+Initialize RTC driver. Detects RTC presence, determines BCD/binary mode, enables 24-hour format.
+
+---
+
+#### rtc_read_time
+```c
+int rtc_read_time(rtc_time_t *time);
+```
+Read the current time from CMOS RTC. Handles Update-In-Progress (UIP) flag for atomic reads, converts BCD to binary, and handles 12-hour/24-hour format.
+
+**Returns:** 1 on success, 0 on failure
+
+---
+
+#### rtc_format_time
+```c
+void rtc_format_time(const rtc_time_t *time, char *buffer);
+```
+Format time as "HH:MM:SS". Buffer must be at least 9 bytes.
+
+---
+
+#### rtc_format_date
+```c
+void rtc_format_date(const rtc_time_t *time, char *buffer);
+```
+Format date as "YYYY-MM-DD". Buffer must be at least 11 bytes.
+
+---
+
+#### rtc_format_datetime
+```c
+void rtc_format_datetime(const rtc_time_t *time, char *buffer);
+```
+Format complete date and time as "YYYY-MM-DD HH:MM:SS". Buffer must be at least 21 bytes.
+
+---
+
+## Serial
+
+**Header:** `kernel/serial.h`
+
+Provides communication via the 16550 UART (serial port). Used primarily for kernel debug output on real hardware.
+
+### Port Constants
+
+```c
+#define COM1_PORT   0x3F8
+#define COM2_PORT   0x2F8
+#define COM3_PORT   0x3E8
+#define COM4_PORT   0x2E8
+```
+
+### Functions
+
+#### serial_init
+```c
+void serial_init(uint16_t port, uint32_t baud);
+```
+Initialize a serial port.
+
+**Parameters:**
+- `port` - Base I/O address (e.g., COM1_PORT = 0x3F8)
+- `baud` - Baud rate (e.g., 9600, 19200, 38400, 57600, 115200)
+
+Configured as 8 data bits, no parity, 1 stop bit (8N1) with FIFO enabled (14-byte threshold).
+
+---
+
+#### serial_write_char
+```c
+void serial_write_char(uint16_t port, char c);
+```
+Write a single character. Automatically expands LF (0x0A) to CR+LF (0x0D 0x0A). Blocks until transmitter is ready.
+
+---
+
+#### serial_write_str
+```c
+void serial_write_str(const char *str);
+```
+Write a null-terminated string to the default serial port (COM1). Convenience wrapper for quick debug output.
+
+---
+
+#### serial_write_hex
+```c
+void serial_write_hex(uint16_t port, uint32_t val);
+```
+Write a 32-bit value as hex (e.g., "0xDEADBEEF") to the serial port.
+
+---
+
+#### serial_write_int
+```c
+void serial_write_int(uint16_t port, int32_t val);
+```
+Write a signed integer in decimal to the serial port.
 
 ---
 
@@ -481,7 +697,7 @@ Check if a key is available in the buffer.
 ```c
 char keyboard_getchar(void);
 ```
-Get next character (blocking).
+Get next character (blocking). Waits until a key is pressed.
 
 ---
 
@@ -501,6 +717,110 @@ int keyboard_is_alt_pressed(void);
 int keyboard_is_caps_on(void);
 ```
 Check modifier key states.
+
+---
+
+## Disk
+
+**Header:** `kernel/disk.h`
+
+Enhanced ATA/ATAPI PIO-mode disk driver with IDENTIFY command support.
+
+### Constants
+
+```c
+#define SECTOR_SIZE     512
+#define ATA_MAX_RETRIES 3
+#define ATA_TIMEOUT     1000000
+```
+
+### Types
+
+#### ata_drive_t
+```c
+typedef struct {
+    uint8_t  drive_type;         // ATA_TYPE_ATA or ATA_TYPE_ATAPI
+    uint8_t  channel;            // 0 = primary, 1 = secondary
+    uint8_t  is_master;          // 1 = master, 0 = slave
+    uint8_t  is_lba48;           // Supports 48-bit LBA
+    uint32_t sectors_28;         // Sectors (28-bit LBA)
+    uint64_t sectors_48;         // Sectors (48-bit LBA)
+    char     model[41];          // Model string
+    char     serial[21];         // Serial number
+    char     firmware[9];        // Firmware revision
+    uint16_t pio_mode;           // PIO mode supported
+    uint16_t dma_mode;           // DMA mode supported
+    uint8_t  present;            // 1 if drive present
+} ata_drive_t;
+```
+
+### Functions
+
+#### disk_init
+```c
+void disk_init(void);
+```
+Initialize ATA subsystem. Scans primary master and runs the IDENTIFY command. Must be called before any read/write operations.
+
+---
+
+#### ata_disk_present
+```c
+int ata_disk_present(void);
+```
+Check if an ATA drive is present.
+
+**Returns:** 1 if present, 0 if not
+
+---
+
+#### ata_read_sector
+```c
+int ata_read_sector(uint32_t lba, uint8_t *buf);
+```
+Read a single sector (512 bytes) from disk. Includes automatic retry on error (up to 3 retries with soft reset).
+
+**Parameters:**
+- `lba` - Logical Block Address
+- `buf` - Buffer (must be at least 512 bytes)
+
+**Returns:** 0 on success, -1 on error
+
+---
+
+#### ata_write_sector
+```c
+int ata_write_sector(uint32_t lba, uint8_t *buf);
+```
+Write a single sector to disk. Flushes write cache after completion.
+
+---
+
+#### ata_read_sectors
+```c
+int ata_read_sectors(uint32_t lba, uint32_t count, uint8_t *buf);
+```
+Read multiple consecutive sectors.
+
+---
+
+#### ata_get_drive_info
+```c
+ata_drive_t* ata_get_drive_info(void);
+```
+Get pointer to the detected drive information structure.
+
+**Returns:** Pointer to ata_drive_t, or NULL if no drive detected
+
+---
+
+#### ata_get_capacity
+```c
+uint64_t ata_get_capacity(void);
+```
+Get drive capacity in bytes.
+
+**Returns:** Capacity in bytes, or 0 if no drive
 
 ---
 
@@ -529,20 +849,13 @@ Check modifier key states.
 #define VGA_COLOR_WHITE         15
 ```
 
-### Global Variables
-
-```c
-extern char shell_username[32];    // Current username
-extern int shell_setup_mode;       // 1 during first-time setup
-```
-
 ### Functions
 
 #### shell_init
 ```c
 void shell_init(const char *username);
 ```
-Initialize shell with username.
+Initialize shell with username. Clears screen, shows welcome message and prompt.
 
 ---
 
@@ -550,24 +863,7 @@ Initialize shell with username.
 ```c
 void shell_handler(char ch);
 ```
-Handle keyboard character input.
-
----
-
-#### shell_handler_special
-```c
-void shell_handler_special(int key);
-```
-Handle special keys (arrows, home, end).
-
-**Key codes:**
-- `SPECIAL_KEY_UP` (0x100)
-- `SPECIAL_KEY_DOWN` (0x101)
-- `SPECIAL_KEY_LEFT` (0x102)
-- `SPECIAL_KEY_RIGHT` (0x103)
-- `SPECIAL_KEY_HOME` (0x104)
-- `SPECIAL_KEY_END` (0x105)
-- `SPECIAL_KEY_DELETE` (0x106)
+Handle keyboard character input. Buffers characters, executes on Enter.
 
 ---
 
@@ -648,7 +944,7 @@ typedef struct {
 ```c
 void pci_init(void);
 ```
-Scan PCI bus and detect all devices.
+Scan all 256 PCI buses, 32 devices per bus, 8 functions per device.
 
 ---
 
@@ -656,7 +952,7 @@ Scan PCI bus and detect all devices.
 ```c
 uint32_t pci_get_device_count(void);
 ```
-Get number of detected PCI devices.
+Returns number of detected PCI devices.
 
 ---
 
@@ -696,11 +992,11 @@ Find device by class/subclass.
 
 ---
 
-#### pci_config_read
+#### pci_class_name
 ```c
-uint32_t pci_config_read(uint8_t bus, uint8_t device, uint8_t func, uint8_t offset);
+const char* pci_class_name(uint8_t class_code);
 ```
-Read 32 bits from PCI configuration space.
+Get human-readable class name string.
 
 ---
 
@@ -720,7 +1016,7 @@ Read 32 bits from PCI configuration space.
 ```c
 void pmm_init(uint32_t mem_size, uint32_t kernel_end);
 ```
-Initialize physical memory manager.
+Initialize physical memory manager with a bitmap allocator.
 
 ---
 
@@ -746,7 +1042,23 @@ Free a physical page frame.
 ```c
 void paging_install(uint32_t mem_size);
 ```
-Enable paging with identity-mapped first 4MB.
+Enable paging with identity-mapped first 4MB. Page directory and first page table are dynamically allocated right after the kernel's BSS section.
+
+---
+
+#### paging_map
+```c
+void paging_map(uint32_t virt, uint32_t phys, uint32_t flags);
+```
+Map a virtual address to a physical address with specified flags.
+
+---
+
+#### paging_get_physical
+```c
+uint32_t paging_get_physical(uint32_t virt);
+```
+Translate virtual address to physical. Returns 0 if not mapped.
 
 ---
 
@@ -760,7 +1072,7 @@ Enable paging with identity-mapped first 4MB.
 ```c
 void kernel_panic(const char *message);
 ```
-Halt system with error message. Never returns.
+Halt system with error message. Displays red panic screen. Never returns.
 
 ---
 
@@ -799,4 +1111,4 @@ if (error_condition) {
 
 ---
 
-*This document is part of Bengal Tiger OS v0.3.0*
+*This document is part of Bengal Tiger OS v0.4.0*

@@ -6,56 +6,58 @@
 |---------|------|------------|
 | 0.1.0 | - | Initial prototype, basic boot |
 | 0.2.0 | - | Shell, keyboard, first-time setup |
-| 0.3.0 | Current | Enhanced shell, heap, timer, PCI, docs |
+| 0.3.0 | 2025-12-26 | Enhanced shell, heap, timer, PCI, docs |
+| **0.4.0** | **2026-06-18** | **Real hardware readiness: GDT, A20, CPUID, FPU, RTC, Serial, enhanced ATA** |
 
 ---
 
-## Current Version: 0.3.0
+## Current Version: 0.4.0 — "Real Hardware Ready"
 
 ### Completed Features ✅
 
-#### Kernel Core
-- [x] Multiboot-compliant bootloader integration
-- [x] Protected mode (32-bit) operation
-- [x] IDT with 256 entries
-- [x] CPU exception handling with panic screen
-- [x] Hardware IRQ handling (timer, keyboard)
-- [x] PIC remapping (8259A)
+#### Real Hardware Boot Stability
+- [x] A20 Gate Enable — Fast gate + keyboard controller fallback
+- [x] Own GDT — Flat 32-bit model, independent of GRUB
+- [x] Stack Initialization — Explicit ESP in boot.s
+- [x] CPUID Detection — Vendor, brand, family/model/stepping
+- [x] FPU Initialization — CR0 config + FNINIT
+- [x] SSE/SSE2 Support — CR4 OSFXSR/OSXMMEXCPT bits
+- [x] Full Multiboot Memory Map — E820 parsing (not just mem_upper)
+- [x] Dynamic Page Tables — After kernel BSS, not hardcoded 0x9C000
 
-#### Memory Management
-- [x] Physical memory manager (bitmap allocator)
-- [x] Paging enabled (identity-mapped 4MB)
-- [x] Kernel heap (kmalloc/kfree)
-- [x] Memory corruption detection
+#### New Drivers
+- [x] RTC (CMOS Real-Time Clock) — Full date/time reading
+- [x] Serial Port (16550 UART) — COM1 debug output at 115200 baud
+- [x] Enhanced ATA/ATAPI — IDENTIFY command, model/serial/firmware, LBA48
+- [x] ACPI Shutdown — Multiple VM/hardware shutdown methods
 
-#### Drivers
-- [x] PS/2 Keyboard with full modifier support
-- [x] PIT Timer at 100Hz
-- [x] ATA PIO disk access (basic)
-- [x] PCI bus scanner
+#### New Shell Commands
+- [x] `date` — Real date/time from RTC
+- [x] `disk` — ATA drive information
+- [x] `cpu` — CPU vendor, brand, features
 
-#### Shell
-- [x] Command-line interface
-- [x] Command history (Up/Down arrows)
-- [x] Cursor movement (Left/Right/Home/End)
-- [x] Colored output
-- [x] 15+ built-in commands
+#### Enhanced Commands
+- [x] `reboot` — PS/2 controller + ACPI + triple fault fallback
+- [x] `shutdown` — QEMU + VirtualBox + Bochs ACPI methods
 
 #### Build System
 - [x] GNU Make based
 - [x] Bootable ISO generation
 - [x] QEMU integration
 - [x] Debug support with GDB
+- [x] Updated for 22 object files
 
-#### Documentation
-- [x] README with usage guide
-- [x] Architecture documentation
-- [x] Build system documentation
-- [x] API reference
+#### Documentation (v0.4.0)
+- [x] README updated with new features, architecture, 7-phase boot
+- [x] Architecture docs updated with CPU init, GDT, new drivers
+- [x] API docs updated with GDT, CPU, RTC, Serial, Disk APIs
+- [x] Build docs updated with new files, serial debug, troubleshooting
+- [x] Changelog with all v0.4.0 additions
+- [x] Roadmap updated with v0.4.0 completed items
 
 ---
 
-## Version 0.4.0 (Next Release)
+## Version 0.5.0 (Next Release)
 
 ### Priority: ★★★ High
 
@@ -67,6 +69,8 @@
   - [ ] File reading (full implementation)
   - [ ] File writing
   - [ ] File creation/deletion
+- [ ] FAT16 filesystem support
+- [ ] FAT32 filesystem support
 
 #### New Shell Commands
 - [ ] `mkdir <dir>` - Create directory
@@ -78,24 +82,24 @@
 
 ### Priority: ★★ Medium
 
-#### Real Time Clock
-- [ ] CMOS RTC driver
-- [ ] `date` command with actual date/time
-- [ ] Timezone support
-
-#### Serial Port
-- [ ] COM1/COM2 driver
-- [ ] Kernel debug output via serial
-- [ ] Serial console support
-
 #### Enhanced PCI
 - [ ] Enable/disable devices
 - [ ] Configure interrupts
 - [ ] Memory-mapped I/O support
 
+#### PS/2 Mouse Driver
+- [ ] IRQ12 handler (INT 44)
+- [ ] Mouse packet parsing
+- [ ] Cursor rendering on VGA
+
+#### Keyboard Enhancements
+- [ ] Multi-scancode set support
+- [ ] Media/extra keys
+- [ ] Typematic rate configuration
+
 ---
 
-## Version 0.5.0
+## Version 0.6.0
 
 ### Priority: ★★★ High
 
@@ -128,7 +132,7 @@
 
 ---
 
-## Version 0.6.0
+## Version 0.7.0
 
 ### Graphics
 
@@ -145,11 +149,6 @@
 - [ ] Window management basics
 
 ### Peripherals
-
-#### PS/2 Mouse
-- [ ] Mouse packet handling
-- [ ] Cursor rendering
-- [ ] Click events
 
 #### Sound
 - [ ] PC Speaker beeps
@@ -189,6 +188,7 @@
 - [ ] Full FAT16/FAT32 support
 - [ ] ISO 9660 (CD-ROM filesystem)
 - [ ] Initial ramdisk
+- [ ] AHCI/SATA driver
 
 ---
 
@@ -199,7 +199,7 @@
 #### x86-64 Port
 - [ ] Long mode transition
 - [ ] 64-bit addressing
-- [ ] New paging structures
+- [ ] New paging structures (PML4)
 - [ ] Updated toolchain
 
 #### UEFI Boot
@@ -210,8 +210,7 @@
 #### Advanced Features
 - [ ] SMP (Symmetric Multiprocessing)
 - [ ] ACPI power management
-- [ ] USB support
-- [ ] AHCI/SATA driver
+- [ ] USB support (UHCI/EHCI)
 
 ### Possible Applications
 
@@ -238,6 +237,7 @@
 - Doxygen-style comments for functions
 - Header guards: `#ifndef FILENAME_H`
 - Prefix global functions with module name
+- Use `UNUSED(x)` for unused parameters
 
 ### Commit Messages
 
@@ -254,7 +254,8 @@ Before submitting:
 1. `make clean && make all` succeeds
 2. Basic boot test in QEMU
 3. Affected commands work correctly
-4. No compiler warnings
+4. No compiler warnings (`-Wall -Wextra` clean)
+5. Serial boot log shows all OK
 
 ---
 
@@ -265,8 +266,9 @@ Before submitting:
 | Tab completion | Not implemented | Type full command |
 | Long commands | May overflow buffer | Keep under 256 chars |
 | FAT write | Uses fixed sectors | For demo only |
-| Real hardware | ATA timing issues | Use VM |
+| No multitasking | Single-threaded kernel | N/A for current use |
+| No DMA | ATA uses PIO mode | Slower but compatible |
 
 ---
 
-*Last updated: Bengal Tiger OS v0.3.0*
+*Last updated: Bengal Tiger OS v0.4.0*

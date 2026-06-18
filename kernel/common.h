@@ -178,6 +178,26 @@ struct regs {
 };
 
 /* ============================================ */
+/* 32-bit I/O Functions (PCI, etc.)               */
+/* ============================================ */
+
+/**
+ * Write a 32-bit double-word to an I/O port.
+ */
+static inline void outl(uint16_t port, uint32_t val) {
+    __asm__ volatile("outl %0, %1" : : "a"(val), "Nd"(port));
+}
+
+/**
+ * Read a 32-bit double-word from an I/O port.
+ */
+static inline uint32_t inl(uint16_t port) {
+    uint32_t ret;
+    __asm__ volatile("inl %1, %0" : "=a"(ret) : "Nd"(port));
+    return ret;
+}
+
+/* ============================================ */
 /* Utility Macros                               */
 /* ============================================ */
 

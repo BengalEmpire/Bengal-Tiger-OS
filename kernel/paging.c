@@ -98,19 +98,28 @@ uint32_t pmm_get_used_frames(void) {
 /* Paging Setup                                 */
 /* ============================================ */
 
-/* Page Directory at fixed address in low memory */
-static uint32_t *page_dir = (uint32_t*)0x9C000;
-
-/* First Page Table (maps 0-4MB) */
-static uint32_t *page_table0 = (uint32_t*)0x9D000;
+/* Page Directory and first Page Table pointers */
+static uint32_t *page_dir = NULL;
+static uint32_t *page_table0 = NULL;
 
 void paging_install(uint32_t mem_size) {
-    UNUSED(mem_size);
+    /* 
+     * Dynamically allocate page directory and first page table
+     * right after the kernel’s BSS section.
+     * This is MUCH safer than hardcoding 0x9C000 which could
+     * overlap with GRUB modules, ACPI tables, or BIOS data.
+     */
+    extern uint32_t bss_end;
+    uint32_t kernel_end = (uint32_t)&bss_end;
+    kernel_end = ALIGN_UP(kernel_end, PAGE_SIZE);
+    
+    page_dir    = (uint32_t*)kernel_end;
+    page_table0 = (uint32_t*)(kernel_end + PAGE_SIZE);
     
     /* 1. Clear page directory */
     memset(page_dir, 0, PAGE_SIZE);
     
-    /* 2. Identity map first 4MB (1024 pages × 4KB = 4MB) */
+    /* 2. Identity map first 4MB (1024 pages x 4KB = 4MB) */
     for (uint32_t i = 0; i < 1024; i++) {
         /* Each entry: Physical Address | Present | Writable */
         page_table0[i] = (i * PAGE_SIZE) | PAGE_PRESENT | PAGE_WRITABLE;

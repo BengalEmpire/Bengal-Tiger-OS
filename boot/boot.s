@@ -7,9 +7,10 @@
     .section .text
     .global start
 start:
-    push %ebx  /* Push multiboot info pointer */
+    mov $0x9BFFF, %esp
+    push %ebx
     call kmain
-1:
     cli
     hlt
+1:
     jmp 1b

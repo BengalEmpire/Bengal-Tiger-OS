@@ -15,6 +15,10 @@
 #include "heap.h"
 #include "pci.h"
 #include "paging.h"
+#include "rtc.h"
+#include "cpu.h"
+#include "serial.h"
+#include "disk.h"
 
 /* Shell state */
 char shell_cmd_buf[SHELL_CMD_MAX_LENGTH];
@@ -199,7 +203,7 @@ static void cmd_help(void) {
     shell_print("  uptime        - Show system uptime\n");
     shell_print("  mem           - Show memory usage\n");
     shell_print("  pci           - List PCI devices\n");
-    shell_print("  date          - Show current uptime\n");
+    shell_print("  date          - Show current date/time\n");
     
     shell_print_color("\nShell Commands:\n", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
     shell_print("  echo <msg>    - Print message\n");
@@ -212,7 +216,11 @@ static void cmd_help(void) {
     shell_print("  reboot        - Reboot the system\n");
     shell_print("  shutdown      - Halt the system\n");
     shell_print("  exit          - Alias for shutdown\n");
-    
+
+    shell_print_color("\nHardware Commands:\n", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+    shell_print("  disk          - Show disk info\n");
+    shell_print("  cpu           - Show CPU information\n");
+
     shell_print_color("\nTips:\n", make_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK));
     shell_print("  * Use UP/DOWN arrows for command history\n");
     shell_print("  * Shift+Letter for uppercase\n\n");
@@ -423,25 +431,42 @@ static void cmd_color(const char *arg) {
 
 static void cmd_reboot(void) {
     shell_print_color("\nRebooting...\n", make_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK));
-    
-    /* PS/2 Controller Reboot - Pulse CPU reset line */
-    uint8_t good = 0x02;
-    while (good & 0x02) {
-        good = inb(0x64);
+
+    /* Method 1: Try keyboard controller reset (works on most real HW) */
+    int timeout = 10000;
+    while (timeout-- && (inb(0x64) & 0x02));
+    if (timeout > 0) {
+        outb(0x64, 0xFE);
     }
-    outb(0x64, 0xFE);  /* Reset CPU */
-    
-    /* If that didn't work, triple fault */
+
+    /* Method 2: Try ACPI reset */
+    outw(0x604, 0x2000);
+
+    /* Method 3: Triple fault (will cause CPU to reset) */
+    __asm__ volatile("cli\n"
+        "mov $0x1234, %%eax\n"
+        "lidt (%%eax)\n"
+        "int $0x03"
+        : : : "eax", "memory");
+
+    /* Last resort */
     __asm__ volatile("cli; hlt");
 }
 
 static void cmd_shutdown(void) {
     shell_print_color("\nShutting down Bengal Tiger OS...\n", make_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK));
     shell_print("Goodbye!\n");
-    
-    /* Try ACPI shutdown (for QEMU/VirtualBox) */
-    outw(0x604, 0x2000);  /* QEMU specific */
-    
+
+    /* Method 1: QEMU/VirtualBox ACPI power off */
+    outw(0x604, 0x2000);
+    outw(0x604, 0x2000);
+
+    /* Method 2: Bochs/QEMU older method */
+    outw(0xB004, 0x2000);
+
+    /* Method 3: VirtualBox ACPI */
+    outw(0x4004, 0x3400);
+
     /* Halt */
     __asm__ volatile("cli; hlt");
 }
@@ -518,12 +543,66 @@ void shell_execute_command(const char *cmd) {
     } else if (strcmp(command, "color") == 0) {
         cmd_color(arg);
     } else if (strcmp(command, "date") == 0) {
-        shell_print("(RTC not implemented - showing uptime)\n");
-        cmd_uptime();
+        rtc_time_t time;
+        if (rtc_read_time(&time)) {
+            char buf[32];
+            rtc_format_datetime(&time, buf);
+            shell_print_color(buf, make_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK));
+            shell_print("\n");
+        } else {
+            shell_print("RTC not available - showing uptime\n");
+            cmd_uptime();
+        }
     } else if (strcmp(command, "reboot") == 0) {
         cmd_reboot();
     } else if (strcmp(command, "shutdown") == 0 || strcmp(command, "exit") == 0) {
         cmd_shutdown();
+    } else if (strcmp(command, "disk") == 0) {
+        ata_drive_t *drive = ata_get_drive_info();
+        if (drive && drive->present) {
+            shell_print_color("\n=== Disk Information ===\n", make_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK));
+            shell_print_color("Model:    ", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+            shell_print(drive->model);
+            shell_print("\n");
+            shell_print_color("Serial:   ", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+            shell_print(drive->serial);
+            shell_print("\n");
+            shell_print_color("Firmware: ", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+            shell_print(drive->firmware);
+            shell_print("\n");
+            shell_print_color("Type:     ", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+            shell_print(drive->drive_type == ATA_TYPE_ATA ? "ATA Hard Disk" : "ATAPI CD/DVD");
+            shell_print("\n");
+            shell_print_color("Capacity: ", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+            uint64_t cap = ata_get_capacity();
+            uint32_t mb = (uint32_t)(cap / (1024 * 1024));
+            shell_print_int(mb);
+            shell_print(" MB");
+            if (drive->is_lba48) {
+                shell_print(" (LBA48)");
+            }
+            shell_print("\n\n");
+        } else {
+            shell_print("\nNo ATA disk detected.\n\n");
+        }
+    } else if (strcmp(command, "cpu") == 0) {
+        shell_print_color("\n=== CPU Information ===\n", make_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK));
+        shell_print_color("Vendor:  ", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+        shell_print(cpu_get_vendor());
+        shell_print("\n");
+        shell_print_color("Brand:   ", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+        shell_print(cpu_get_brand());
+        shell_print("\n");
+        if (cpu_info.has_fpu) {
+            shell_print_color("FPU:     ", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+            shell_print("Present\n");
+        }
+        if (cpu_info.has_sse || cpu_info.has_sse2) {
+            shell_print_color("SSE:    ", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+            shell_print(cpu_info.has_sse2 ? "SSE2" : "SSE");
+            shell_print("\n");
+        }
+        shell_print("\n");
     } else {
         shell_print_color("Unknown command: ", make_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK));
         shell_print(command);

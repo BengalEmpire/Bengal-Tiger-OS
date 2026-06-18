@@ -37,16 +37,7 @@ typedef struct {
     uint32_t bar[6];        /* Base Address Registers */
 } pci_device_t;
 
-/* 32-bit I/O (needed for PCI) */
-static inline void outl(uint16_t port, uint32_t val) {
-    __asm__ volatile("outl %0, %1" : : "a"(val), "Nd"(port));
-}
-
-static inline uint32_t inl(uint16_t port) {
-    uint32_t ret;
-    __asm__ volatile("inl %1, %0" : "=a"(ret) : "Nd"(port));
-    return ret;
-}
+/* outl() and inl() moved to common.h */
 
 /**
  * Initialize PCI subsystem - scans all buses for devices.

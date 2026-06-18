@@ -6,10 +6,13 @@
  * 
  * @file main.c
  * @author Bengal Tiger OS (BengalEmpire)
- * @version 0.3.0
+ * @version 0.4.0
  */
 
 #include "common.h"
+#include "multiboot.h"
+#include "gdt.h"
+#include "cpu.h"
 #include "idt.h"
 #include "pic.h"
 #include "keyboard.h"
@@ -23,46 +26,76 @@
 #include "timer.h"
 #include "heap.h"
 #include "panic.h"
-
-/* Multiboot Information Structure (Partial) */
-typedef struct {
-    uint32_t flags;             /* Multiboot info version number */
-    uint32_t mem_lower;         /* Available memory from BIOS (KB) */
-    uint32_t mem_upper;         /* Available memory above 1MB (KB) */
-    uint32_t boot_device;       /* "root" partition */
-    uint32_t cmdline;           /* Kernel command line */
-    uint32_t mods_count;        /* Number of modules loaded */
-    uint32_t mods_addr;         /* Pointer to modules */
-    /* ... more fields follow */
-} __attribute__((packed)) multiboot_info_t;
+#include "rtc.h"
+#include "serial.h"
 
 /* External symbols from linker */
 extern uint32_t bss_end;
 
 /* Kernel Information */
 #define KERNEL_NAME     "Bengal Tiger OS"
-#define KERNEL_VERSION  "0.3.0"
+#define KERNEL_VERSION  "0.4.0"
 #define KERNEL_ARCH     "i386"
 
 /* Boot flags */
 static int first_boot = 0;
 static uint32_t total_memory = 0;
 
+/* Saved multiboot info for memory map parsing */
+static multiboot_info_t *saved_mbi = NULL;
+
 /**
  * Print boot progress message
  */
 static void boot_log(const char *component, const char *status) {
+    serial_write_str("  [");
+    serial_write_str(status);
+    serial_write_str("] ");
+    serial_write_str(component);
+    serial_write_str("\n");
+
     shell_print_color("  [", 0x07);
     if (strcmp(status, "OK") == 0) {
-        shell_print_color(status, 0x0A);  /* Green */
+        shell_print_color(status, 0x0A);
     } else if (strcmp(status, "FAIL") == 0) {
-        shell_print_color(status, 0x0C);  /* Red */
+        shell_print_color(status, 0x0C);
     } else {
-        shell_print_color(status, 0x0E);  /* Yellow */
+        shell_print_color(status, 0x0E);
     }
     shell_print_color("] ", 0x07);
     shell_print(component);
     shell_print("\n");
+}
+
+/**
+ * Parse the multiboot memory map and calculate physical memory size.
+ */
+static uint32_t parse_memory_map(multiboot_info_t *mbi) {
+    uint32_t total = 0;
+
+    if (!(mbi->flags & (1 << 6)) || mbi->mmap_length == 0) {
+        if (mbi->flags & 0x01) {
+            total = (mbi->mem_upper * 1024) + 0x100000;
+        } else {
+            total = 16 * 1024 * 1024;
+        }
+        boot_log("Memory (fallback)", "WARN");
+        return total;
+    }
+
+    multiboot_mmap_entry_t *entry = multiboot_mmap_first(mbi);
+    while (multiboot_mmap_has_more(mbi, entry)) {
+        if (entry->type == MULTIBOOT_MMAP_AVAILABLE) {
+            total += (uint32_t)entry->len;
+        }
+        entry = multiboot_mmap_next(entry);
+    }
+
+    if (total == 0) {
+        total = 16 * 1024 * 1024;
+    }
+
+    return total;
 }
 
 /**
@@ -73,81 +106,99 @@ static void boot_log(const char *component, const char *status) {
  * @param mbi Pointer to multiboot information structure
  */
 void kmain(multiboot_info_t *mbi) {
+    saved_mbi = mbi;
+
     /* ============================================ */
-    /* Phase 1: Critical Hardware Initialization   */
+    /* Phase 1: CPU Initialization                 */
     /* ============================================ */
-    
-    /* 1.1 - Remap PIC (Programmable Interrupt Controller)
-     * Maps IRQ 0-7 to INT 32-39, IRQ 8-15 to INT 40-47
-     * This prevents conflicts with CPU exceptions (INT 0-31)
-     */
-    pic_remap();
-    
-    /* 1.2 - Install IDT (Interrupt Descriptor Table)
-     * Sets up CPU exception handlers and IRQ handlers
-     */
-    idt_install();
-    
-    /* ============================================ */
-    /* Phase 2: Memory Management                  */
-    /* ============================================ */
-    
-    /* 2.1 - Calculate total available memory */
-    if (mbi->flags & 0x01) {
-        total_memory = (mbi->mem_upper * 1024) + 0x100000;  /* mem_upper + 1MB */
+
+    if (a20_enable()) {
+        boot_log("A20 Gate", "OK");
     } else {
-        total_memory = 16 * 1024 * 1024;  /* Assume 16MB if not provided */
+        boot_log("A20 Gate", "FAIL");
     }
-    
-    /* 2.2 - Initialize Physical Memory Manager
-     * Uses bitmap to track physical page allocation
-     */
+
+    gdt_init();
+    boot_log("GDT", "OK");
+
+    cpu_init();
+    boot_log("CPU Features", "OK");
+    if (cpu_info.has_fpu) {
+        boot_log("FPU", "OK");
+    }
+    if (cpu_info.has_sse || cpu_info.has_sse2) {
+        boot_log("SSE/SSE2", "OK");
+    }
+
+    /* ============================================ */
+    /* Phase 2: Critical Hardware                  */
+    /* ============================================ */
+
+    pic_remap();
+    boot_log("PIC", "OK");
+
+    idt_install();
+    boot_log("IDT", "OK");
+
+    /* ============================================ */
+    /* Phase 3: Memory Management                  */
+    /* ============================================ */
+
+    total_memory = parse_memory_map(mbi);
+
     uint32_t kernel_end = (uint32_t)&bss_end;
     pmm_init(total_memory, kernel_end);
-    
-    /* 2.3 - Setup Paging (Virtual Memory)
-     * Identity maps first 4MB, enables paging
-     */
+    boot_log("PMM", "OK");
+
     paging_install(total_memory);
-    
-    /* 2.4 - Initialize Kernel Heap
-     * Provides kmalloc/kfree for dynamic allocation
-     */
+    boot_log("Paging", "OK");
+
     heap_init();
+    boot_log("Heap", "OK");
     
     /* ============================================ */
-    /* Phase 3: Device Drivers                     */
+    /* Phase 4: Device Drivers                     */
     /* ============================================ */
-    
-    /* 3.1 - Timer (PIT - Programmable Interval Timer)
-     * Configured for 100Hz (10ms interval)
-     */
+
+    serial_init(COM1_PORT, 115200);
+    boot_log("Serial", "OK");
+
     timer_init();
-    
-    /* 3.2 - PS/2 Keyboard Driver */
+    boot_log("Timer", "OK");
+
     keyboard_init();
-    
-    /* 3.3 - ATA Disk Driver (stub) */
+    boot_log("Keyboard", "OK");
+
+    rtc_init();
+    boot_log("RTC", "OK");
+
+    disk_init();
+    if (ata_disk_present()) {
+        boot_log("ATA Disk", "OK");
+    } else {
+        boot_log("ATA Disk", "WARN");
+    }
+
     fat_init();
-    
-    /* 3.4 - Scheduler (stub) */
+    boot_log("FAT", "OK");
+
     scheduler_init();
-    
-    /* 3.5 - PCI Bus Scan
-     * Detects all PCI devices on the bus
-     */
+    boot_log("Scheduler", "OK");
+
     pci_init();
-    
-    /* 3.6 - Network Driver (stub) */
+    boot_log("PCI Scan", "OK");
+
     nic_init();
+    boot_log("NIC", "OK");
     
     /* ============================================ */
-    /* Phase 4: Enable Interrupts                  */
+    /* Phase 5: Enable Interrupts                  */
     /* ============================================ */
     __asm__ volatile("sti");
-    
+    boot_log("Interrupts", "OK");
+
     /* ============================================ */
-    /* Phase 5: Load User Configuration            */
+    /* Phase 6: User Configuration & Setup         */
     /* ============================================ */
     
     uint8_t config[512];
@@ -192,20 +243,22 @@ void kmain(multiboot_info_t *mbi) {
     }
     
     /* ============================================ */
-    /* Phase 6: Main Idle Loop                     */
+    /* Phase 7: Main Idle Loop                     */
     /* ============================================ */
-    
-    /* 
-     * The kernel now enters an idle loop.
-     * All work is done via interrupt handlers:
-     * - IRQ0 (32): Timer tick for scheduling
-     * - IRQ1 (33): Keyboard input handling
-     * - Other IRQs: Hardware devices
-     * 
-     * The HLT instruction puts the CPU into a low-power
-     * state until the next interrupt arrives.
-     */
+
+    serial_write_str("\n*** Bengal Tiger OS boot complete ***\n");
+    serial_write_str("Version: 0.4.0 | Architecture: i386\n");
+    serial_write_str("Ready. Waiting for input...\n");
+
     while (1) {
         __asm__ volatile("hlt");
     }
+}
+
+uint32_t get_total_memory(void) {
+    return total_memory;
+}
+
+int is_first_boot(void) {
+    return first_boot;
 }

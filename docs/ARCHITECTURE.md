@@ -3,22 +3,23 @@
 ## Table of Contents
 1. [System Overview](#system-overview)
 2. [Boot Process](#boot-process)
-3. [Memory Management](#memory-management)
-4. [Interrupt Handling](#interrupt-handling)
-5. [Device Drivers](#device-drivers)
-6. [Shell Subsystem](#shell-subsystem)
+3. [CPU Initialization](#cpu-initialization)
+4. [Memory Management](#memory-management)
+5. [Interrupt Handling](#interrupt-handling)
+6. [Device Drivers](#device-drivers)
+7. [Shell Subsystem](#shell-subsystem)
 
 ---
 
 ## System Overview
 
-Bengal Tiger OS is a 32-bit protected mode operating system designed for x86 processors. It follows a monolithic kernel architecture where all kernel services run in Ring 0 (kernel mode).
+Bengal Tiger OS is a 32-bit protected mode operating system designed for x86 processors. It follows a monolithic kernel architecture where all kernel services run in Ring 0 (kernel mode). The OS is engineered for real hardware compatibility with proper CPU initialization, GDT setup, memory management, and device drivers.
 
 ### Design Principles
-1. **Simplicity** - Clear, readable code over premature optimization
-2. **Modularity** - Each subsystem is in separate files with clean interfaces
-3. **Documentation** - Every function and module is documented
-4. **Learning** - Designed to teach OS development concepts
+1. **Real Hardware First** — All code designed to work on real x86 machines, not just emulators
+2. **Simplicity** — Clear, readable code over premature optimization
+3. **Modularity** — Each subsystem is in separate files with clean interfaces
+4. **Diagnostics** — Dual output (serial + VGA) for debugging
 
 ### Address Space Layout
 
@@ -43,6 +44,7 @@ Bengal Tiger OS is a 32-bit protected mode operating system designed for x86 pro
 ├──────────────────────────────────────────┤ 0x00400000 (4MB)
 │                                          │
 │        Kernel BSS + Data                 │
+│        Page Tables (dynamic, after BSS)  │
 │                                          │
 ├──────────────────────────────────────────┤ 0x00200000 (2MB)
 │                                          │
@@ -53,8 +55,8 @@ Bengal Tiger OS is a 32-bit protected mode operating system designed for x86 pro
 ├──────────────────────────────────────────┤ 0x000A0000
 │        VGA Buffer (0xB8000)              │
 ├──────────────────────────────────────────┤ 0x0009F000
-│        Page Directory (0x9C000)          │
-├──────────────────────────────────────────┤ 0x0009C000
+│        Stack (temporary, before paging)  │
+├──────────────────────────────────────────┤ 0x0009BFFF
 │        Conventional Memory               │
 ├──────────────────────────────────────────┤ 0x00000500
 │        BIOS Data Area                    │
@@ -69,57 +71,142 @@ Bengal Tiger OS is a 32-bit protected mode operating system designed for x86 pro
 1. BIOS loads GRUB from MBR
 2. GRUB reads `grub.cfg`
 3. GRUB loads `kernel.bin` to memory at 1MB
-4. GRUB jumps to kernel entry point
+4. GRUB passes multiboot info in EBX
+5. GRUB jumps to kernel entry point
 
 ### Stage 2: boot.s
 ```nasm
 ; Called by GRUB with:
 ; EBX = pointer to multiboot info structure
 start:
-    push %ebx        ; Save multiboot info
-    call kmain       ; Jump to C code
-1:  
-    cli              ; Should never reach here
+    mov $0x9BFFF, %esp     ; Set up stack immediately
+    push %ebx              ; Save multiboot info
+    call kmain             ; Jump to C code
+    cli                    ; Should never reach here
     hlt
+1:
     jmp 1b
 ```
 
-### Stage 3: kmain() Initialization
+The `mov $0x9BFFF, %esp` is **critical** — it sets up a known-good stack in conventional memory, rather than relying on whatever stack GRUB left for us. Different GRUB versions and BIOS implementations may leave the stack pointer at unpredictable locations.
+
+### Stage 3: kmain() — 7-Phase Initialization
 
 ```
-Phase 1: Critical Hardware
+Phase 1: CPU Initialization
+├── A20 Gate Enable
+│   ├── Check if already enabled
+│   ├── Fast A20 (port 0x92) — modern method
+│   └── Keyboard controller (0x64/0x60) — fallback
+└── Global Descriptor Table (GDT)
+│   ├── Null descriptor (required)
+│   ├── Kernel Code: Ring 0, 32-bit, base 0, limit 4GB
+│   ├── Kernel Data: Ring 0, 32-bit, base 0, limit 4GB
+│   └── Far jump to reload CS via ljmp
+└── CPU Feature Detection
+    ├── CPUID availability check (EFLAGS ID bit)
+    ├── Vendor string (GenuineIntel, AuthenticAMD, etc.)
+    ├── Brand string (full CPU name)
+    ├── Feature flags (FPU, SSE, SSE2, MSR, APIC, etc.)
+    ├── x87 FPU initialization (CR0 EM/MP, FNINIT)
+    └── SSE/SSE2 enable (CR4 OSFXSR/OSXMMEXCPT)
+
+Phase 2: Critical Hardware
 ├── PIC Remap (8259A)
-│   └── IRQ 0-15 → INT 32-47
+│   └── IRQ 0-15 → INT 32-47 (avoids CPU exception conflicts)
 └── IDT Install
     └── 256 interrupt gates configured
 
-Phase 2: Memory Management
+Phase 3: Memory Management
+├── Memory Map Parsing
+│   ├── Full E820 map from multiboot
+│   ├── Falls back to mem_upper if no map
+│   └── Only counts MULTIBOOT_MMAP_AVAILABLE regions
 ├── PMM Init (Physical Memory Manager)
-│   └── Bitmap-based page allocator
+│   └── Bitmap-based page allocator with accurate memory size
 ├── Paging Enable
-│   └── Identity map first 4MB
+│   ├── Identity map first 4MB
+│   ├── Page tables allocated AFTER kernel BSS (not hardcoded)
+│   └── CR3 loaded with dynamic page directory address
 └── Heap Init
     └── Free-list allocator at 4MB
 
-Phase 3: Device Drivers
+Phase 4: Device Drivers
+├── Serial Port (COM1, 115200 baud)
 ├── Timer (PIT at 100Hz)
 ├── Keyboard (PS/2)
-├── Disk (ATA PIO)
-├── FAT (stub)
+├── RTC (CMOS clock)
+├── ATA Disk (IDENTIFY + PIO read/write)
+├── FAT (stub filesystem)
+├── Scheduler (single task)
 ├── PCI Scanner
 └── NIC (stub)
 
-Phase 4: Enable Interrupts
+Phase 5: Enable Interrupts
 └── STI instruction
 
-Phase 5: User Setup
-├── Load config.cfg
-├── If first boot:
-│   └── Prompt for username
+Phase 6: User Setup
+├── Load config.cfg from disk
+├── If first boot: prompt for username
 └── Initialize shell
 
-Phase 6: Idle Loop
+Phase 7: Idle Loop
 └── HLT until interrupt
+```
+
+---
+
+## CPU Initialization
+
+### A20 Gate
+
+The A20 gate controls access to the address line A20. When disabled (as on some real hardware), addresses above 1MB wrap around to the first 1MB. This is **critical** to enable because our kernel loads at 1MB.
+
+```c
+int a20_enable(void) {
+    // 1. Check if already enabled (memory wrap test)
+    // 2. Try fast A20 (port 0x92) - works on most systems
+    // 3. Fallback to keyboard controller (more compatible)
+}
+```
+
+### GDT (Global Descriptor Table)
+
+Bengal Tiger OS installs its own GDT rather than relying on GRUB's. This ensures:
+
+- Known segment descriptors (0x08 = code, 0x10 = data)
+- Proper descriptor types and privilege levels
+- Independence from bootloader changes
+
+```c
+void gdt_init(void) {
+    // Null descriptor (index 0)
+    // Kernel Code: base=0, limit=4GB, Ring 0, 32-bit (index 1)
+    // Kernel Data: base=0, limit=4GB, Ring 0, 32-bit (index 2)
+    // Load GDTR via lgdt
+    // Reload DS, ES, FS, GS, SS
+    // Far jump to reload CS (ljmp $0x08, $flush)
+}
+```
+
+### CPUID and FPU
+
+```c
+int cpu_detect_cpuid(void) {
+    // Try to toggle the ID flag (bit 21) in EFLAGS
+    // If it toggles, CPUID is available
+}
+
+void cpu_query_features(void) {
+    // CPUID leaf 0: Vendor string (ebx:edx:ecx)
+    // CPUID leaf 1: Family/Model/Stepping + feature flags
+    // CPUID leaf 0x80000002-04: Brand string
+}
+
+void fpu_init(void) {
+    // Clear CR0.EM (Emulation), set CR0.MP (Monitor)
+    // Issue FNINIT to reset FPU state
+}
 ```
 
 ---
@@ -128,11 +215,10 @@ Phase 6: Idle Loop
 
 ### Physical Memory Manager (PMM)
 
-The PMM uses a **bitmap allocator** where each bit represents a 4KB page frame.
+The PMM uses a **bitmap allocator** where each bit represents a 4KB page frame. The bitmap size is 32768 × 32 bits = 1,048,576 frames = 4GB max addressable.
 
 ```c
-// Bitmap array: 32768 uint32_t = 1M pages = 4GB max
-static uint32_t bitmap[BITMAP_SIZE];
+static uint32_t bitmap[BITMAP_SIZE];  // 131072 bytes = 128KB bitmap
 
 // Allocation: find first free bit
 uint32_t pmm_alloc_frame(void) {
@@ -149,17 +235,17 @@ void pmm_free_frame(uint32_t addr) {
 
 ### Virtual Memory (Paging)
 
-Currently using **identity mapping** (virtual = physical) for the first 4MB.
+Uses **identity mapping** (virtual = physical) for the first 4MB. The page directory and first page table are **dynamically allocated** right after the kernel's BSS section, avoiding conflicts with GRUB modules, ACPI tables, or BIOS data.
 
 ```
-Page Directory (1024 entries × 4 bytes = 4KB)
+Page Directory (1024 entries × 4 bytes = 4KB) — at kernel_end
 ├── Entry 0 → Page Table 0 (maps 0-4MB)
 ├── Entry 1 → Not Present
 ├── Entry 2 → Not Present
 │   ...
 └── Entry 1023 → Not Present
 
-Page Table 0 (1024 entries × 4 bytes = 4KB)
+Page Table 0 (1024 entries × 4 bytes = 4KB) — at kernel_end + 4KB
 ├── Entry 0 → Physical 0x00000000
 ├── Entry 1 → Physical 0x00001000
 │   ...
@@ -168,7 +254,7 @@ Page Table 0 (1024 entries × 4 bytes = 4KB)
 
 ### Kernel Heap
 
-The heap uses a **first-fit free-list** algorithm with block coalescing.
+The heap uses a **first-fit free-list** algorithm with block coalescing, located at 4MB.
 
 ```
 Block Structure:
@@ -191,14 +277,14 @@ Block Structure:
 Allocation Strategy:
 1. Traverse free list
 2. Find first block with size >= requested
-3. Split block if significantly larger
+3. Split block if significantly larger (>= 16 bytes + header)
 4. Mark as allocated
 5. Return pointer to data area
 
 Deallocation:
-1. Validate magic number
+1. Validate magic number (detect corruption)
 2. Mark block as free
-3. Coalesce with adjacent free blocks
+3. Coalesce with adjacent free blocks (prev and next)
 ```
 
 ---
@@ -221,8 +307,10 @@ The IDT contains 256 gate descriptors:
 
 ```c
 void exception_handler(struct regs *r) {
-    // Display panic screen
-    // Show register dump
+    // Display panic screen with:
+    // - Exception name
+    // - Full register dump (EAX, EBX, ECX, EDX, ESI, EDI, EBP, ESP, EIP)
+    // - Page fault address (CR2) for #PF
     // Halt system
 }
 ```
@@ -312,10 +400,62 @@ static const char scancode_upper[128] = {...};
 
 void keyboard_handler(void) {
     uint8_t scancode = inb(0x60);
-    
+
     // Handle modifier keys (Shift, Ctrl, Alt, Caps)
     // Convert to ASCII based on modifiers
     // Send to shell handler
+}
+```
+
+### Serial Port (16550 UART)
+
+```c
+void serial_init(uint16_t port, uint32_t baud) {
+    // Disable interrupts
+    // Set DLAB to access divisor latch
+    // Set baud rate divisor (115200 / baud)
+    // 8-bit data, no parity, 1 stop bit (8N1)
+    // Enable FIFO with 14-byte threshold
+    // Enable DTR, RTS, OUT2
+}
+```
+
+Debug output: Connect to COM1 at 115200 baud, 8N1 to see kernel boot logs.
+
+### RTC (Real-Time Clock)
+
+```c
+// CMOS RTC registers via ports 0x70/0x71
+#define CMOS_SECONDS    0x00
+#define CMOS_MINUTES    0x02
+#define CMOS_HOURS      0x04
+#define CMOS_DAY        0x07
+#define CMOS_MONTH      0x08
+#define CMOS_YEAR       0x09
+#define CMOS_CENTURY    0x32   // ACPI century register
+
+int rtc_read_time(rtc_time_t *time) {
+    // Wait for Update-In-Progress to clear
+    // Read all time registers atomically
+    // Convert BCD to binary if needed
+    // Handle 12-hour/24-hour format
+    // Calculate full year (with century support)
+}
+```
+
+### ATA Disk Driver
+
+```c
+int ata_identify(ata_drive_t *drive, uint8_t channel, uint8_t is_master) {
+    // Select drive (master/slave)
+    // Send IDENTIFY command (0xEC)
+    // If device returns ERR + ABORT → try IDENTIFY PACKET DEVICE (ATAPI)
+    // Read 256 words of identification data
+    // Parse model string (words 27-46, byte-swapped)
+    // Parse serial number (words 10-19)
+    // Parse firmware revision (words 23-26)
+    // Check LBA48 support (word 83, bit 10)
+    // Read sector counts (words 60-61 for 28-bit, 100-103 for 48-bit)
 }
 ```
 
@@ -399,18 +539,50 @@ volatile uint16_t *video = (uint16_t*)0xB8000;
 video[offset] = character | (color << 8);
 ```
 
+### Available Commands
+
+| Category | Commands |
+|----------|----------|
+| **File** | `ls`, `cat <file>` |
+| **System** | `info`, `neofetch`, `uptime`, `mem`, `pci`, `date`, `disk`, `cpu` |
+| **Shell** | `help`, `echo`, `clear`, `color`, `history` |
+| **Control** | `reboot`, `shutdown`, `exit` |
+
 ---
 
 ## API Reference
 
 ### common.h
 ```c
+void outb(uint16_t port, uint8_t val);
+void outw(uint16_t port, uint16_t val);
+void outl(uint16_t port, uint32_t val);
+uint8_t inb(uint16_t port);
+uint16_t inw(uint16_t port);
+uint32_t inl(uint16_t port);
 void memset(void *dest, uint8_t val, uint32_t len);
 void memcpy(void *dest, const void *src, uint32_t len);
+int memcmp(const void *s1, const void *s2, uint32_t n);
 int strlen(const char *s);
 int strcmp(const char *s1, const char *s2);
-void outb(uint16_t port, uint8_t val);
-uint8_t inb(uint16_t port);
+char *strcpy(char *dest, const char *src);
+```
+
+### gdt.h
+```c
+void gdt_init(void);
+```
+
+### cpu.h
+```c
+void cpu_init(void);
+int a20_enable(void);
+int cpu_detect_cpuid(void);
+void cpu_query_features(void);
+void fpu_init(void);
+int sse_enable(void);
+const char* cpu_get_vendor(void);
+const char* cpu_get_brand(void);
 ```
 
 ### heap.h
@@ -434,13 +606,35 @@ void sleep_s(uint32_t seconds);
 void timer_format_uptime(char *buffer);
 ```
 
+### rtc.h
+```c
+void rtc_init(void);
+int rtc_read_time(rtc_time_t *time);
+void rtc_format_time(const rtc_time_t *time, char *buffer);
+void rtc_format_date(const rtc_time_t *time, char *buffer);
+void rtc_format_datetime(const rtc_time_t *time, char *buffer);
+int rtc_is_present(void);
+```
+
+### serial.h
+```c
+void serial_init(uint16_t port, uint32_t baud);
+void serial_write_char(uint16_t port, char c);
+void serial_write_str(const char *str);
+void serial_write_hex(uint16_t port, uint32_t val);
+void serial_write_int(uint16_t port, int32_t val);
+```
+
 ### shell.h
 ```c
 void shell_init(const char *username);
 void shell_handler(char ch);
+void shell_handler_special(int key);
 void shell_print(const char *s);
 void shell_print_color(const char *s, uint8_t color);
 void shell_clear_screen(void);
+void shell_boot_animation(void);
+void shell_execute_command(const char *cmd);
 ```
 
 ### pci.h
@@ -453,6 +647,37 @@ const char* pci_vendor_name(uint16_t vendor_id);
 const char* pci_class_name(uint8_t class_code);
 ```
 
+### disk.h
+```c
+void disk_init(void);
+int ata_disk_present(void);
+int ata_read_sector(uint32_t lba, uint8_t *buf);
+int ata_write_sector(uint32_t lba, uint8_t *buf);
+int ata_read_sectors(uint32_t lba, uint32_t count, uint8_t *buf);
+int ata_identify(ata_drive_t *drive, uint8_t channel, uint8_t is_master);
+ata_drive_t* ata_get_drive_info(void);
+uint64_t ata_get_capacity(void);
+```
+
+### paging.h
+```c
+void pmm_init(uint32_t mem_size, uint32_t kernel_end);
+uint32_t pmm_alloc_frame(void);
+void pmm_free_frame(uint32_t addr);
+void paging_install(uint32_t mem_size);
+void paging_map(uint32_t virt, uint32_t phys, uint32_t flags);
+void paging_unmap(uint32_t virt);
+uint32_t paging_get_physical(uint32_t virt);
+```
+
+### panic.h
+```c
+void kernel_panic(const char *message);
+void kernel_panic_at(const char *message, const char *file, int line);
+#define ASSERT(condition) ...
+#define PANIC(msg) ...
+```
+
 ---
 
-*This document is part of Bengal Tiger OS v0.3.0*
+*This document is part of Bengal Tiger OS v0.4.0*
