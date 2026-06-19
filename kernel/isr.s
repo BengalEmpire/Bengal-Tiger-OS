@@ -158,3 +158,6 @@ irq_common:
     popa
     add $8, %esp
     iret
+
+# Mark stack as non-executable to suppress linker warning
+.section .note.GNU-stack,"",@progbits

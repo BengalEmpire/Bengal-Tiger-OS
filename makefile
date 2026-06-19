@@ -274,8 +274,13 @@ iso: build/kernel.bin
 	@echo "Welcome to Bengal Tiger OS filesystem!" > iso/boot/hello.txt
 
 bengaltiger.iso: iso
-	grub-mkrescue -o bengaltiger.iso iso 2>/dev/null || \
-	grub-mkrescue -o bengaltiger.iso iso
+	@echo "Creating bootable ISO with grub-mkrescue..."
+	grub-mkrescue -o bengaltiger.iso iso || { \
+		echo "grub-mkrescue failed. Make sure mtools, xorriso, and grub are installed:"; \
+		echo "  Ubuntu/Debian: sudo apt-get install grub-pc-bin mtools xorriso"; \
+		echo "  Fedora: sudo dnf install grub2-tools mtools xorriso"; \
+		exit 1; \
+	}
 
 # ==============================================================================
 # RUNNING / DEBUGGING
