@@ -274,13 +274,21 @@ iso: build/kernel.bin
 	@echo "Welcome to Bengal Tiger OS filesystem!" > iso/boot/hello.txt
 
 bengaltiger.iso: iso
-	@echo "Creating bootable ISO with grub-mkrescue..."
-	grub-mkrescue -o bengaltiger.iso iso || { \
-		echo "grub-mkrescue failed. Make sure mtools, xorriso, and grub are installed:"; \
-		echo "  Ubuntu/Debian: sudo apt-get install grub-pc-bin mtools xorriso"; \
-		echo "  Fedora: sudo dnf install grub2-tools mtools xorriso"; \
-		exit 1; \
-	}
+	@echo "Creating bootable ISO..."
+	@{ grub-mkrescue -o bengaltiger.iso iso 2>&1 || { \
+		if command -v xorriso >/dev/null 2>&1; then \
+			echo "grub-mkrescue failed, trying xorriso..."; \
+			xorriso -as mkisofs -o bengaltiger.iso -c boot.cat \
+				-b boot/grub/i386-pc/eltorito.img -no-emul-boot \
+				-boot-load-size 4 -boot-info-table iso; \
+		else \
+			echo "ERROR: Both grub-mkrescue and xorriso failed."; \
+			echo "Install required packages:"; \
+			echo "  Ubuntu/Debian: sudo apt-get install grub-pc-bin xorriso"; \
+			echo "  Fedora: sudo dnf install grub2-tools xorriso"; \
+			exit 1; \
+		fi; \
+	}; }
 
 # ==============================================================================
 # RUNNING / DEBUGGING

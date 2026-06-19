@@ -14,3 +14,6 @@ start:
     hlt
 1:
     jmp 1b
+
+# Mark stack as non-executable to suppress linker warning
+.section .note.GNU-stack,"",@progbits
