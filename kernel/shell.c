@@ -62,7 +62,6 @@ static const char *tiger_art[] = {
 /* Forward declarations */
 static void show_prompt(void);
 static void scroll(void);
-static void update_cursor_visual(void);
 
 /* Helper: Make VGA color attribute */
 static inline uint8_t make_color(uint8_t fg, uint8_t bg) {
@@ -417,7 +416,7 @@ static void cmd_pci(void) {
     shell_print("\n");
 }
 
-static void cmd_history(void) {
+static void cmd_show_history(void) {
     shell_print_color("\n=== Command History ===\n", make_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK));
     
     int start = (history_count > SHELL_HISTORY_SIZE) ? history_count - SHELL_HISTORY_SIZE : 0;
@@ -556,7 +555,7 @@ void shell_execute_command(const char *cmd) {
     } else if (strcmp(command, "pci") == 0) {
         cmd_pci();
     } else if (strcmp(command, "history") == 0) {
-        cmd_history();
+        cmd_show_history();
     } else if (strcmp(command, "color") == 0) {
         cmd_color(arg);
     } else if (strcmp(command, "date") == 0) {

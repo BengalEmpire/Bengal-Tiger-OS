@@ -141,9 +141,16 @@ int ata_identify(ata_drive_t *drive, uint8_t channel, uint8_t is_master) {
     drive->firmware[8] = '\0';
 
     drive->is_lba48 = (identify[83] & (1 << 10)) ? 1 : 0;
-    drive->sectors_28 = *(uint32_t*)&identify[60];
+    
+    /* Use memcpy to avoid strict-aliasing issues */
+    uint32_t sectors_28;
+    memcpy(&sectors_28, &identify[60], sizeof(uint32_t));
+    drive->sectors_28 = sectors_28;
+    
     if (drive->is_lba48) {
-        drive->sectors_48 = *(uint64_t*)&identify[100];
+        uint64_t sectors_48;
+        memcpy(&sectors_48, &identify[100], sizeof(uint64_t));
+        drive->sectors_48 = sectors_48;
     } else {
         drive->sectors_48 = drive->sectors_28;
     }

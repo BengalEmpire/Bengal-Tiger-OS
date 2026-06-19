@@ -3,6 +3,41 @@
 All notable changes to Bengal Tiger OS will be documented in this file.
 
 
+## [0.5.1] - 2026-06-19
+
+### Fixed
+
+#### 🔧 Critical Build Fixes
+
+- **Symbol Collision** — Renamed `cmd_history()` function to `cmd_show_history()` to avoid naming conflict with `cmd_history[]` array in shell.c (line 420).
+- **Unused Declaration** — Removed forward declaration of `update_cursor_visual()` which was never implemented.
+- **Assembly Newlines** — Added trailing newlines to `boot/boot.s` and `kernel/isr.s` to eliminate assembler warnings.
+- **Strict-Aliasing** — Replaced type-punned pointer access in `disk.c` (lines 144, 146) with `memcpy()` to avoid undefined behavior and compiler warnings:
+  - `drive->sectors_28 = *(uint32_t*)&identify[60]` → `memcpy(&sectors_28, &identify[60], sizeof(uint32_t))`
+  - `drive->sectors_48 = *(uint64_t*)&identify[100]` → `memcpy(&sectors_48, &identify[100], sizeof(uint64_t))`
+
+### Added
+
+#### 📋 Documentation
+
+- **BUILD_FIXES_AND_IMPROVEMENTS.md** — Comprehensive architectural analysis document covering:
+  - All build fixes applied
+  - Identified weaknesses (10 categories: stack overflow, memory protection, heap fragmentation, interrupt re-entrancy, race conditions, ATA limitations, VBE performance, buffer sizes, PCI limits, serial configuration)
+  - Detailed recommendations with code examples
+  - Implementation roadmap (5 phases: Critical Fixes, Memory & Safety, I/O Performance, Multitasking, User Mode)
+  - Code quality metrics and testing recommendations
+
+### Changed
+
+#### 🛠️ Code Quality
+
+- **Compilation Status** — All warnings and errors eliminated
+  - 0 compilation errors
+  - 0 compilation warnings (with `-Wall -Wextra`)
+  - Build now completes cleanly
+
+---
+
 ## [0.5.0] - 2026-06-18
 
 ### Added
