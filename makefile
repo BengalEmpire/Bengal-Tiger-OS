@@ -275,20 +275,16 @@ iso: build/kernel.bin
 
 bengaltiger.iso: iso
 	@echo "Creating bootable ISO..."
-	@{ grub-mkrescue -o bengaltiger.iso iso 2>&1 || { \
-		if command -v xorriso >/dev/null 2>&1; then \
-			echo "grub-mkrescue failed, trying xorriso..."; \
-			xorriso -as mkisofs -o bengaltiger.iso -c boot.cat \
-				-b boot/grub/i386-pc/eltorito.img -no-emul-boot \
-				-boot-load-size 4 -boot-info-table iso; \
-		else \
-			echo "ERROR: Both grub-mkrescue and xorriso failed."; \
-			echo "Install required packages:"; \
-			echo "  Ubuntu/Debian: sudo apt-get install grub-pc-bin xorriso"; \
-			echo "  Fedora: sudo dnf install grub2-tools xorriso"; \
-			exit 1; \
-		fi; \
-	}; }
+	@if command -v grub-mkrescue >/dev/null 2>&1; then \
+		grub-mkrescue -o bengaltiger.iso iso; \
+	elif command -v xorriso >/dev/null 2>&1; then \
+		xorriso -as mkisofs -o bengaltiger.iso -c boot.cat \
+			-b boot/grub/i386-pc/eltorito.img -no-emul-boot \
+			-boot-load-size 4 -boot-info-table iso; \
+	else \
+		echo "WARNING: grub-mkrescue or xorriso not found. ISO not created."; \
+		echo "Kernel binary is available at build/kernel.bin"; \
+	fi
 
 # ==============================================================================
 # RUNNING / DEBUGGING

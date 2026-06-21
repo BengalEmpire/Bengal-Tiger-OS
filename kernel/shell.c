@@ -520,7 +520,7 @@ void shell_execute_command(const char *cmd) {
     if (strcmp(command, "help") == 0) {
         cmd_help();
     } else if (strcmp(command, "ls") == 0) {
-        shell_print("Files: hello.txt config.cfg\n");
+        fat_list_files();
     } else if (strcmp(command, "cat") == 0) {
         if (strlen(arg) == 0) {
             shell_print("Usage: cat <filename>\n");
@@ -770,8 +770,10 @@ void shell_handler(char ch) {
             shell_cmd_pos--;
             cursor_pos--;
             
-            /* Redraw */
+            /* Handle screen update */
             shell_offset--;
+
+            /* Redraw */
             redraw_command_line();
         }
     } else if (ch == '\t') {
