@@ -149,8 +149,12 @@ void kmain(multiboot_info_t *mbi) {
 
     total_memory = parse_memory_map(mbi);
 
+    /* Reserve memory for Page Directory and initial Page Tables.
+     * We allocate 1 page for PD and 4 pages for PTs (covers 16MB). */
     uint32_t kernel_end = (uint32_t)&bss_end;
-    pmm_init(total_memory, kernel_end);
+    uint32_t pmm_start = ALIGN_UP(kernel_end, PAGE_SIZE) + (5 * PAGE_SIZE);
+
+    pmm_init(total_memory, pmm_start);
     boot_log("PMM", "OK");
 
     paging_install(total_memory);

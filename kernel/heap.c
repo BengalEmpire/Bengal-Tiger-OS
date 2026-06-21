@@ -157,26 +157,55 @@ void *kzalloc(uint32_t size) {
 }
 
 void *kmalloc_aligned(uint32_t size, uint32_t alignment) {
-    /* Simple implementation: allocate extra and align */
-    void *ptr = kmalloc(size + alignment);
-    if (ptr == NULL) return NULL;
+    if (alignment < 4) alignment = 4;
     
-    uint32_t addr = (uint32_t)ptr;
-    uint32_t aligned = (addr + alignment - 1) & ~(alignment - 1);
+    /* Allocate enough space for size + alignment + 4 bytes to store the original pointer */
+    uint32_t total_size = size + alignment + 4;
+    void *raw_ptr = kmalloc(total_size);
+    if (raw_ptr == NULL) return NULL;
     
-    /* Note: This wastes some memory. A proper implementation would store
-     * the original pointer for freeing. For now, this is a simple approach. */
-    return (void *)aligned;
+    /* Calculate aligned address, leaving at least 4 bytes before it for the raw pointer */
+    uint32_t addr = (uint32_t)raw_ptr + 4;
+    uint32_t aligned_addr = (addr + alignment - 1) & ~(alignment - 1);
+
+    /* Store the raw pointer immediately before the aligned address */
+    ((void **)aligned_addr)[-1] = raw_ptr;
+
+    return (void *)aligned_addr;
 }
 
 void kfree(void *ptr) {
     if (ptr == NULL) {
         return;
     }
+
+    /* Check if this pointer is aligned and has a stored raw pointer.
+     * We need a way to distinguish between normal kmalloc and kmalloc_aligned.
+     * Since we don't have a flag in the header yet, we check if the pointer
+     * immediately follows a valid heap_block_t header. */
     
-    /* Get block header */
     heap_block_t *block = (heap_block_t *)((uint8_t *)ptr - HEADER_SIZE);
     
+    /* If the magic doesn't match, it might be an aligned pointer */
+    if (block->magic != HEAP_BLOCK_MAGIC) {
+        /* Try to retrieve original pointer from kmalloc_aligned */
+        void *raw_ptr = ((void **)ptr)[-1];
+
+        /* Validate the raw pointer */
+        if (raw_ptr != NULL && (uint32_t)raw_ptr >= HEAP_START) {
+            heap_block_t *raw_block = (heap_block_t *)((uint8_t *)raw_ptr - HEADER_SIZE);
+            if (raw_block->magic == HEAP_BLOCK_MAGIC) {
+                ptr = raw_ptr;
+                block = raw_block;
+            } else {
+                /* Not a valid heap block */
+                return;
+            }
+        } else {
+            return;
+        }
+    }
+
     /* Validate magic number */
     if (block->magic != HEAP_BLOCK_MAGIC) {
         /* Heap corruption detected! */
