@@ -1,6 +1,6 @@
 /**
  * Bengal Tiger OS - FAT Filesystem Driver
- *
+ * 
  * Supports FAT12 and FAT16 reading.
  * 
  * @file fat.c
@@ -13,6 +13,7 @@
 #include "common.h"
 #include "heap.h"
 #include "shell.h"
+#include "serial.h"
 
 /* FAT Boot Sector Structure */
 typedef struct {
@@ -30,7 +31,7 @@ typedef struct {
     uint16_t num_heads;
     uint32_t hidden_sectors;
     uint32_t total_sectors_32;
-
+    
     /* Extended BIOS Parameter Block */
     uint8_t  drive_num;
     uint8_t  reserved1;
@@ -66,12 +67,18 @@ static int fat_type = 0; /* 12 or 16 */
 
 void fat_init(void) {
     uint8_t buf[512];
-    if (ata_read_sector(0, buf) != 0) return;
-
+    if (ata_read_sector(0, buf) != 0) {
+        serial_write_str("FAT: Failed to read boot sector\n");
+        return;
+    }
+    
     memcpy(&boot_sector, buf, sizeof(fat_boot_t));
-
-    if (boot_sector.bytes_per_sector != 512) return;
-
+    
+    if (boot_sector.bytes_per_sector != 512) {
+        serial_write_str("FAT: Invalid bytes per sector\n");
+        return;
+    }
+    
     fat_start_sector = boot_sector.reserved_sectors;
     root_start_sector = fat_start_sector + (boot_sector.num_fats * boot_sector.fat_size_16);
     root_sectors = ((boot_sector.root_entries * 32) + (boot_sector.bytes_per_sector - 1)) / boot_sector.bytes_per_sector;
@@ -95,13 +102,16 @@ static uint32_t get_fat_entry(uint32_t cluster) {
     } else {
         fat_offset = cluster * 2;
     }
-
+    
     uint32_t sector = fat_start_sector + (fat_offset / 512);
     uint32_t offset = fat_offset % 512;
-
-    uint8_t buf[512];
+    
+    uint8_t buf[1024]; /* Read 2 sectors to handle entries spanning boundaries */
     if (ata_read_sector(sector, buf) != 0) return 0x0FFFFFF7;
-
+    if (offset > 510) {
+        if (ata_read_sector(sector + 1, buf + 512) != 0) return 0x0FFFFFF7;
+    }
+    
     uint32_t next_cluster;
     if (fat_type == 12) {
         next_cluster = (uint32_t)(*(uint16_t*)&buf[offset]);
@@ -113,7 +123,7 @@ static uint32_t get_fat_entry(uint32_t cluster) {
     } else {
         next_cluster = (uint32_t)(*(uint16_t*)&buf[offset]);
     }
-
+    
     return next_cluster;
 }
 
@@ -126,7 +136,7 @@ static int filename_to_fat(const char *name, char *fat_name) {
         fat_name[j++] = (name[i] >= 'a' && name[i] <= 'z') ? name[i] - 'a' + 'A' : name[i];
         i++;
     }
-
+    
     if (name[i] == '.') {
         i++;
         j = 8;
@@ -145,13 +155,13 @@ static fat_dirent_t* find_dirent(const char *name) {
     uint8_t buf[512];
     for (uint32_t s = 0; s < root_sectors; s++) {
         if (ata_read_sector(root_start_sector + s, buf) != 0) break;
-
+        
         fat_dirent_t *entries = (fat_dirent_t*)buf;
         for (int i = 0; i < 16; i++) {
             if ((uint8_t)entries[i].name[0] == 0x00) return NULL;
             if ((uint8_t)entries[i].name[0] == 0xE5) continue;
             if (entries[i].attr & FAT_ATTR_VOLUME_ID) continue;
-
+            
             if (memcmp(entries[i].name, fat_name, 11) == 0) {
                 fat_dirent_t *res = kmalloc(sizeof(fat_dirent_t));
                 memcpy(res, &entries[i], sizeof(fat_dirent_t));
@@ -177,28 +187,28 @@ void fat_load_file(const char *name, void *buf) {
         memset(buf, 0, 512);
         return;
     }
-
+    
     uint32_t cluster = ent->cluster_low | (ent->cluster_high << 16);
     uint8_t *ptr = (uint8_t*)buf;
     uint32_t bytes_left = ent->size;
-
+    
     while (cluster < (fat_type == 12 ? 0x0FF8 : 0xFFF8) && bytes_left > 0) {
         uint32_t sector = data_start_sector + (cluster - 2) * boot_sector.sectors_per_cluster;
-
+        
         for (int s = 0; s < boot_sector.sectors_per_cluster && bytes_left > 0; s++) {
             uint8_t sector_buf[512];
             ata_read_sector(sector + s, sector_buf);
-
+            
             uint32_t to_copy = (bytes_left > 512) ? 512 : bytes_left;
             memcpy(ptr, sector_buf, to_copy);
-
+            
             ptr += to_copy;
             bytes_left -= to_copy;
         }
-
+        
         cluster = get_fat_entry(cluster);
     }
-
+    
     kfree(ent);
 }
 
@@ -212,16 +222,16 @@ void fat_list_files(void) {
     uint8_t buf[512];
     shell_print("\nName         Size       Attr\n");
     shell_print("-----------  ---------  ----\n");
-
+    
     for (uint32_t s = 0; s < root_sectors; s++) {
         if (ata_read_sector(root_start_sector + s, buf) != 0) break;
-
+        
         fat_dirent_t *entries = (fat_dirent_t*)buf;
         for (int i = 0; i < 16; i++) {
             if ((uint8_t)entries[i].name[0] == 0x00) return;
             if ((uint8_t)entries[i].name[0] == 0xE5) continue;
             if (entries[i].attr & FAT_ATTR_VOLUME_ID) continue;
-
+            
             /* Print name.ext */
             char name[13];
             int p = 0;
@@ -231,13 +241,13 @@ void fat_list_files(void) {
                 for (int k = 0; k < 3; k++) if (entries[i].ext[k] != ' ') name[p++] = entries[i].ext[k];
             }
             name[p] = 0;
-
+            
             shell_print(name);
             for (int k = strlen(name); k < 13; k++) shell_print(" ");
-
+            
             shell_print_int(entries[i].size);
             shell_print(" bytes    ");
-
+            
             if (entries[i].attr & FAT_ATTR_DIRECTORY) shell_print("DIR");
             else shell_print("FILE");
             shell_print("\n");

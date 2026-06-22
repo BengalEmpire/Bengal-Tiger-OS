@@ -167,10 +167,10 @@ void *kmalloc_aligned(uint32_t size, uint32_t alignment) {
     /* Calculate aligned address, leaving at least 4 bytes before it for the raw pointer */
     uint32_t addr = (uint32_t)raw_ptr + 4;
     uint32_t aligned_addr = (addr + alignment - 1) & ~(alignment - 1);
-
+    
     /* Store the raw pointer immediately before the aligned address */
     ((void **)aligned_addr)[-1] = raw_ptr;
-
+    
     return (void *)aligned_addr;
 }
 
@@ -190,7 +190,7 @@ void kfree(void *ptr) {
     if (block->magic != HEAP_BLOCK_MAGIC) {
         /* Try to retrieve original pointer from kmalloc_aligned */
         void *raw_ptr = ((void **)ptr)[-1];
-
+        
         /* Validate the raw pointer */
         if (raw_ptr != NULL && (uint32_t)raw_ptr >= HEAP_START) {
             heap_block_t *raw_block = (heap_block_t *)((uint8_t *)raw_ptr - HEADER_SIZE);
@@ -205,7 +205,7 @@ void kfree(void *ptr) {
             return;
         }
     }
-
+    
     /* Validate magic number */
     if (block->magic != HEAP_BLOCK_MAGIC) {
         /* Heap corruption detected! */

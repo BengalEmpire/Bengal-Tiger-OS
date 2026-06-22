@@ -117,14 +117,14 @@ void paging_install(uint32_t mem_size) {
     /* 1. Clear page directory */
     memset(page_dir, 0, PAGE_SIZE);
     
-    /* 2. Identity map first 16MB (4 page tables x 4MB)
+    /* 2. Identity map first 16MB (4 page tables x 4MB) 
      * This covers the kernel, page tables, and the heap (at 4MB).
      * It also ensures that the first few pages allocated by PMM
      * for subsequent page tables are also identity mapped. */
     for (uint32_t pt_idx = 0; pt_idx < 4; pt_idx++) {
         uint32_t *pt = pts + (pt_idx * 1024);
         page_dir[pt_idx] = (uint32_t)pt | PAGE_PRESENT | PAGE_WRITABLE;
-
+        
         for (uint32_t pg_idx = 0; pg_idx < 1024; pg_idx++) {
             uint32_t addr = (pt_idx * 4 * 1024 * 1024) + (pg_idx * PAGE_SIZE);
             pt[pg_idx] = addr | PAGE_PRESENT | PAGE_WRITABLE;

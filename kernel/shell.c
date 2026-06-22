@@ -54,7 +54,7 @@ static const char *tiger_art[] = {
     "                              /  BENGAL  \\",
     "                             |   TIGER   |",
     "                             |    OS     |",
-    "                              \\  v0.3.0  /",
+    "                              \\  v0.6.0  /",
     "                               `-.____..-'",
     NULL
 };
@@ -772,7 +772,7 @@ void shell_handler(char ch) {
             
             /* Handle screen update */
             shell_offset--;
-
+            
             /* Redraw */
             redraw_command_line();
         }

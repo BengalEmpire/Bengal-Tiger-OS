@@ -121,7 +121,7 @@ OBJS = build/boot.o \
 # PHONY TARGETS
 # ==============================================================================
 
-.PHONY: all clean iso run debug help
+.PHONY: all clean build iso run debug help
 
 # ==============================================================================
 # BUILD TARGETS
@@ -266,7 +266,7 @@ build/kernel.bin: $(OBJS) linker.ld
 # ISO CREATION
 # ==============================================================================
 
-iso: build/kernel.bin
+iso: build/kernel.bin build
 	@cp build/kernel.bin iso/boot/kernel.bin
 	@cp grub/grub.cfg iso/boot/grub/grub.cfg
 	# Create config file for first boot detection
