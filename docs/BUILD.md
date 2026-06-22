@@ -18,7 +18,7 @@ sudo apt install build-essential
 sudo apt install gcc-multilib
 
 # GRUB and ISO creation
-sudo apt install grub-pc-bin grub-common xorriso
+sudo apt install grub-pc-bin grub-common xorriso mtools
 
 # Emulation
 sudo apt install qemu-system-x86
@@ -465,7 +465,7 @@ sudo apt install gcc-multilib libc6-dev-i386
 
 **Error: grub-mkrescue not found**
 ```bash
-sudo apt install grub-pc-bin grub-common xorriso
+sudo apt install grub-pc-bin grub-common xorriso mtools
 ```
 
 **Error: undefined reference to `__stack_chk_fail`**
@@ -572,7 +572,7 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt update
-        sudo apt install -y gcc-multilib grub-pc-bin xorriso
+        sudo apt install -y gcc-multilib grub-pc-bin xorriso mtools
     
     - name: Build
       run: make all

@@ -275,14 +275,14 @@ iso: build/kernel.bin build
 
 bengaltiger.iso: iso
 	@echo "Creating bootable ISO..."
-	@if command -v grub-mkrescue >/dev/null 2>&1; then \
+	@if command -v grub-mkrescue >/dev/null 2>&1 && command -v mformat >/dev/null 2>&1; then \
 		grub-mkrescue -o bengaltiger.iso iso; \
 	elif command -v xorriso >/dev/null 2>&1; then \
 		xorriso -as mkisofs -o bengaltiger.iso -c boot.cat \
 			-b boot/grub/i386-pc/eltorito.img -no-emul-boot \
 			-boot-load-size 4 -boot-info-table iso; \
 	else \
-		echo "WARNING: grub-mkrescue or xorriso not found. ISO not created."; \
+		echo "WARNING: grub-mkrescue (with mtools) or xorriso not found. ISO not created."; \
 		echo "Kernel binary is available at build/kernel.bin"; \
 	fi
 

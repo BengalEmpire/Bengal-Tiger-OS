@@ -25,6 +25,7 @@ jobs:
             grub-pc-bin \
             grub-common \
             xorriso \
+            mtools \
             make
 
       - name: Build kernel and ISO
