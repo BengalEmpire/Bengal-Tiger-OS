@@ -1,6 +1,6 @@
 # Bengal Tiger OS
 
- ```
+```
 ██████╗ ███████╗███╗   ██╗ ██████╗  █████╗ ██╗            
 ██╔══██╗██╔════╝████╗  ██║██╔════╝ ██╔══██╗██║            
 ██████╔╝█████╗  ██╔██╗ ██║██║  ███╗███████║██║            
@@ -16,36 +16,37 @@
    ╚═╝   ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝     ╚═════╝ ╚══════╝
 ```
 
-**Bengal Tiger OS** is a 32-bit hobby operating system written in C and x86 assembly, engineered for booting on real x86 hardware. It boots via GRUB with a full Multiboot-compliant kernel, features a colorful terminal shell, hardware drivers, VESA framebuffer graphics, and a robust initialization pipeline. This OS is designed for learning OS development and provides a production-quality foundation.
+**Bengal Tiger OS** is a 32-bit x86 (i386) open-source operating system written in ANSI C and x86 Assembly. Designed with modular architecture, hardware abstraction layers, VBE graphics, FAT filesystem persistence, Realtek network drivers, and a preemptive task scheduler, Bengal Tiger OS serves as a production-quality, educational, and real-world-ready operating system.
 
 ---
 
-## ✨ New in Version 0.5.0 — "Graphics Mode"
+## ✨ New in Version 0.6.0 — "Real-World OS Kernel Release"
 
-### 🎨 VBE Framebuffer Graphics
-- **VESA Linear Framebuffer** — High-resolution graphics via GRUB's `gfxpayload`
-- **Multiple Resolutions** — 1024×768×32, 800×600×32, 1280×1024×32
-- **Pixel Drawing** — `vbe_putpixel()`, `vbe_fill_rect()`, `vbe_draw_rect()`, lines
-- **Text Rendering** — 8×16 bitmap font with word wrap and newline support
-- **Screen Management** — Clear, scroll, color fills
-- **16 VGA Colors** — Pre-mapped to 32-bit RGBA
+### 🔄 Preemptive Multitasking Task Scheduler
+- **Round-Robin Task Scheduler**: Preemptive task switching executing on timer interrupts (IRQ0).
+- **Task Management**: Dynamic thread creation (`task_create`), voluntary task yields (`task_exit`), and process termination (`task_kill`).
+- **Context Preservation**: Register frame stack switching (`struct regs*`) in hardware ISR stubs.
 
-### 🐚 New Shell Command
+### 🌐 Realtek RTL8139 Hardware Network Driver
+- **PCI Discovery**: Automatic scanning and initialization for Realtek 8139 NICs (Vendor `0x10EC`, Device `0x8139`).
+- **Circular Ring Buffer**: 8KB physical RX ring buffer management with CAPR updating.
+- **TX Descriptors**: 4-descriptor round-robin hardware transmit queues.
+- **Hardware MAC Address**: Real-time reading of EEPROM/registers and Ethernet frame construction.
+
+### 💾 FAT Filesystem Write & Cluster Chaining
+- **File Creation & Modification**: Supports creating new directory entries and writing file contents (`fat_save_file`).
+- **Multi-Cluster Chaining**: Dynamically allocates clusters and updates FAT12/FAT16 tables.
+- **Root Directory Allocation**: Finds empty/deleted directory slots (`0x00`/`0xE5`) for new files.
+
+### 🐚 New Shell Commands
 | Command | Description |
 |---------|-------------|
-| `vbe` | Show framebuffer info + draw a demo pattern (color bars, border, text) |
-
-### 📋 Updated Features
-- `neofetch` now shows graphics resolution when VBE is active
-- 5 GRUB boot entries: text mode + 3 graphics modes + debug
-
-### 📁 New Files
-| File | Description |
-|------|-------------|
-| `kernel/vbe.h` | VBE framebuffer types and drawing API |
-| `kernel/vbe.c` | VBE init, pixel/rect/text rendering, paging mapping |
-| `kernel/font.h` | 8×16 bitmap font header |
-| `kernel/font.c` | 8×16 bitmap font data (95 ASCII characters) |
+| `ps` | List running kernel tasks, PIDs, and process states |
+| `kill <pid>` | Terminate a task by its Process ID (PID) |
+| `ifconfig` | Display network interfaces, I/O base, MAC address, and TX/RX packet statistics |
+| `ping <ip>` | Transmit test Ethernet frames over the RTL8139 network interface |
+| `touch <file>` | Create a new empty file in the FAT root directory |
+| `write <file> <text>` | Write text into a file on the FAT volume |
 
 ---
 
@@ -53,24 +54,31 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                      USER SHELL                               │
+│                      USER SHELL                             │
 │  Commands: help, neofetch, pci, mem, uptime, date, disk,    │
-│           cpu, vbe, echo, clear, color, history, reboot,...  │
+│           cpu, vbe, mouse, ps, kill, ifconfig, ping,        │
+│           touch, write, cat, ls, echo, clear, reboot,...    │
 ├─────────────────────────────────────────────────────────────┤
 │                    KERNEL SUBSYSTEMS                          │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐       │
 │  │  RTC     │ │  Serial  │ │   Disk   │ │   FAT    │       │
-│  │ (CMOS)   │ │ (UART)   │ │(ATA PIO) │ │Filesystem│       │
+│  │ (CMOS)   │ │ (UART)   │ │(ATA PIO) │ │ (R/W)    │       │
 │  └──────────┘ └──────────┘ └──────────┘ └──────────┘       │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐       │
 │  │  Timer   │ │ Keyboard │ │   Heap   │ │Scheduler │       │
-│  │  (PIT)   │ │  (PS/2)  │ │ Allocator│ │  (stub)  │       │
+│  │  (PIT)   │ │  (PS/2)  │ │ Allocator│ │(Preempt) │       │
 │  └──────────┘ └──────────┘ └──────────┘ └──────────┘       │
 ├─────────────────────────────────────────────────────────────┤
-│                    GRAPHICS LAYER                             │
+│                    GRAPHICS & INPUT                          │
 │  ┌────────────────────┐  ┌────────────────────┐             │
-│  │  VBE Framebuffer   │  │  8x16 Bitmap Font  │             │
-│  │ Pixel/Shape/Text   │  │  95 ASCII glyphs   │             │
+│  │  VBE Framebuffer   │  │   PS/2 Mouse Driver│             │
+│  │ Pixel/Shape/Text   │  │ Hardware Cursor    │             │
+│  └────────────────────┘  └────────────────────┘             │
+├─────────────────────────────────────────────────────────────┤
+│               NETWORK DRIVER & BUS LAYER                      │
+│  ┌────────────────────┐  ┌────────────────────┐             │
+│  │ Realtek RTL8139    │  │     PCI Bus        │             │
+│  │ RX Ring / TX Descs │  │ Enum & Scanner     │             │
 │  └────────────────────┘  └────────────────────┘             │
 ├─────────────────────────────────────────────────────────────┤
 │                   CPU / SYSTEM LAYER                         │
@@ -81,8 +89,8 @@
 ├─────────────────────────────────────────────────────────────┤
 │                  HARDWARE ABSTRACTION                         │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐       │
-│  │   IDT    │ │   PIC    │ │  Paging  │ │   PCI    │       │
-│  │  (256)   │ │  (8259)  │ │ (Dynamic)│ │  Scanner │       │
+│  │   IDT    │ │   PIC    │ │  Paging  │ │ Context  │       │
+│  │  (256)   │ │  (8259)  │ │ (Dynamic)│ │ Switch   │       │
 │  └──────────┘ └──────────┘ └──────────┘ └──────────┘       │
 ├─────────────────────────────────────────────────────────────┤
 │               BOOT (GRUB/Multiboot + Stack Init)             │
@@ -91,131 +99,56 @@
 
 ---
 
-## 📁 Project Structure
+## 🛠️ Build & Run Instructions
 
+### Prerequisites (Debian/Ubuntu)
+```bash
+sudo apt update
+sudo apt install build-essential gcc-multilib grub-pc-bin grub-common xorriso mtools qemu-system-x86
 ```
-Bengal-Tiger-OS/
-├── boot/
-│   └── boot.s              # Multiboot entry + stack init
-├── grub/
-│   └── grub.cfg            # GRUB bootloader config (with graphics mode entries)
-├── kernel/
-│   ├── main.c              # Kernel entry point (7-phase init)
-│   ├── common.c/h          # Utility functions, types, I/O ports
-│   ├── multiboot.h         # Multiboot info & E820 memory map
-│   ├── gdt.c/h             # Global Descriptor Table (own GDT)
-│   ├── cpu.c/h             # CPUID, A20 gate, FPU/SSE init
-│   ├── idt.c/h             # Interrupt Descriptor Table
-│   ├── isr.s               # Interrupt service routines (asm)
-│   ├── isr.c               # Interrupt handlers (C)
-│   ├── pic.c/h             # 8259 PIC controller
-│   ├── paging.c/h          # Virtual memory (dynamic allocation)
-│   ├── heap.c/h            # Dynamic memory allocator
-│   ├── timer.c/h           # PIT timer driver
-│   ├── keyboard.c/h        # PS/2 keyboard driver
-│   ├── rtc.c/h             # CMOS Real-Time Clock driver
-│   ├── serial.c/h          # 16550 UART serial driver
-│   ├── disk.c/h            # Enhanced ATA/ATAPI driver
-│   ├── fat.c/h             # FAT filesystem (stub)
-│   ├── vbe.c/h             # VBE framebuffer driver
-│   ├── font.c/h            # 8x16 bitmap font data
-│   ├── pci.c/h             # PCI bus scanner
-│   ├── nic.c/h             # Network driver (stub)
-│   ├── scheduler.c/h       # Task scheduler (stub)
-│   ├── shell.c/h           # Command-line interface
-│   └── panic.c/h           # Kernel panic handler
-├── linker.ld               # Linker script
-├── makefile                # Build system (24 object files)
-└── docs/                   # Documentation
+
+### Build Kernel Binary
+```bash
+make build
+make build/kernel.bin
+```
+
+### Create Bootable ISO & Run in QEMU
+```bash
+make all
+make run
 ```
 
 ---
 
-## 🛠️ Build Instructions
+## 🗺️ Roadmap: Path to a Professional Real-World OS
 
-- Check the [BUILD.md](docs/BUILD.md) file for detailed build instructions.
+To further evolve Bengal Tiger OS into an enterprise-grade, general-purpose production operating system, the development roadmap encompasses:
 
-## 📖 Using Bengal Tiger OS
+1. **Virtual File System (VFS) Abstraction Layer**:
+   - POSIX-compliant file descriptor tables (`open`, `read`, `write`, `close`).
+   - Mounting architecture supporting ext2, FAT32, and ramfs filesystems.
 
-### Boot Process
-1. GRUB menu appears (5 second timeout) — select **text mode** or a **graphics mode**
-2. Boot log scrolls: A20 → GDT → CPU → PIC → IDT → PMM → Paging → Heap → VBE → Serial → Timer → Keyboard → RTC → ATA → FAT → Scheduler → PCI → NIC → Interrupts
-3. Bengal Tiger logo animation plays
-4. Enter your username (first boot) or shell prompt appears
-5. Shell prompt: `yourname@bengal-tiger:~$`
+2. **Network Protocol Stack (TCP/IP)**:
+   - ARP resolution, IPv4 routing, ICMP protocol engine.
+   - UDP and TCP socket layers with BSD Sockets API (`socket`, `bind`, `connect`, `send`, `recv`).
 
-### Available Commands
+3. **User-Mode Execution & Privilege Separation (Ring 0 vs Ring 3)**:
+   - Dynamic ELF executable binary loader (`/bin/sh`, `/bin/ls`).
+   - Task State Segment (TSS) setup and user-mode page table isolation (`PAGE_USER`).
+   - Software interrupt `INT 0x80` / `SYSENTER` system call ABI.
 
-#### File Commands
-| Command | Description |
-|---------|-------------|
-| `ls` | List files |
-| `cat <file>` | Display file contents |
+4. **Symmetric Multiprocessing (SMP)**:
+   - Advanced Programmable Interrupt Controller (APIC / IOAPIC) driver.
+   - Inter-Processor Interrupts (IPI) and multi-core CPU initialization via ACPI.
 
-#### System Commands
-| Command | Description |
-|---------|-------------|
-| `info` | Show OS version |
-| `neofetch` | Display system info with ASCII art |
-| `uptime` | Show system uptime |
-| `mem` | Show memory usage |
-| `pci` | List PCI devices |
-| `date` | Show real date/time (RTC) |
-| `disk` | Show ATA drive information |
-| `cpu` | Show CPU vendor, brand, features |
-| `vbe` | Show VBE framebuffer info + draw demo pattern |
-
-#### Shell Commands
-| Command | Description |
-|---------|-------------|
-| `help` | Show all commands |
-| `echo <msg>` | Print message |
-| `clear` | Clear screen |
-| `color <0-15>` | Set text color |
-| `history` | Show command history |
-
-#### Control Commands
-| Command | Description |
-|---------|-------------|
-| `reboot` | Reboot system |
-| `shutdown` | Halt system |
-| `exit` | Alias for shutdown |
-
-### Keyboard Shortcuts
-| Key | Function |
-|-----|----------|
-| `↑` / `↓` | Navigate command history |
-| `←` / `→` | Move cursor in line |
-| `Home` | Jump to line start |
-| `End` | Jump to line end |
-| `Backspace` | Delete character before cursor |
-| `Delete` | Delete character at cursor |
-| `Shift+Letter` | Uppercase letter |
-| `Caps Lock` | Toggle uppercase |
-
-### Debug via Serial
-Connect a serial terminal (e.g., `picocom`, `screen`, `PuTTY`) to COM1 at 115200 baud to see kernel boot logs and debug output in real time.
+5. **Enhanced USB Host Controller & Storage Drivers**:
+   - EHCI (USB 2.0) and xHCI (USB 3.0) host controller interface drivers.
+   - USB Mass Storage class driver for USB flash drive booting and persistence.
 
 ---
 
-## 🎨 VGA Colors
-
-Use `color <n>` to change text color:
-
-| # | Color | # | Color |
-|---|-------|---|-------|
-| 0 | Black | 8 | Dark Grey |
-| 1 | Blue | 9 | Light Blue |
-| 2 | Green | 10 | Light Green |
-| 3 | Cyan | 11 | Light Cyan |
-| 4 | Red | 12 | Light Red |
-| 5 | Magenta | 13 | Light Magenta |
-| 6 | Brown | 14 | Yellow |
-| 7 | Light Grey | 15 | White |
-
----
-
-## 📞 Contact
+## 📞 Contact & License
 
 Created with 💛 by BengalEmpire
 
