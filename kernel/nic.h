@@ -1,12 +1,11 @@
 /**
- * Bengal Tiger OS - Network Interface Controller (Stub)
+ * Bengal Tiger OS - Network Interface Controller Driver
  * 
- * Placeholder for future network driver implementation.
- * Will support Intel E1000 and RTL8139 NICs.
+ * Support for Realtek RTL8139 NIC with hardware RX/TX ring buffers.
  * 
  * @file nic.h
  * @author Bengal Tiger OS (BengalEmpire)
- * @version 0.3.0
+ * @version 0.6.0
  */
 
 #ifndef NIC_H
@@ -30,6 +29,8 @@ typedef struct {
     uint32_t netmask;           /* Subnet mask */
     uint32_t gateway;           /* Default gateway */
     uint8_t status;             /* Interface status */
+    uint16_t io_base;           /* I/O port base address */
+    uint8_t irq;                /* Hardware IRQ */
     
     /* Statistics */
     uint32_t tx_packets;        /* Packets transmitted */
@@ -42,7 +43,7 @@ typedef struct {
 
 /**
  * Initialize network drivers.
- * Scans PCI bus for supported NICs.
+ * Scans PCI bus for RTL8139 NIC.
  */
 void nic_init(void);
 
@@ -59,7 +60,7 @@ nic_t* nic_get_interface(int index);
 int nic_get_count(void);
 
 /**
- * Send an Ethernet frame (stub).
+ * Send an Ethernet frame over RTL8139 NIC.
  * 
  * @param nic Network interface
  * @param dest_mac Destination MAC address
@@ -71,7 +72,7 @@ int nic_get_count(void);
 int nic_send(nic_t *nic, uint8_t *dest_mac, uint16_t type, void *data, uint32_t len);
 
 /**
- * Receive an Ethernet frame (stub).
+ * Receive an Ethernet frame.
  * 
  * @param nic Network interface
  * @param buffer Receive buffer

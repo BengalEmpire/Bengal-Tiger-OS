@@ -1,12 +1,11 @@
 /**
- * Bengal Tiger OS - Scheduler (Stub)
+ * Bengal Tiger OS - Preemptive Task Scheduler
  * 
- * Task scheduling infrastructure stub.
- * Currently provides a single-task environment with tick counting.
+ * Supports circular multi-tasking, kernel threads, task creation, and context switching.
  * 
  * @file scheduler.h
  * @author Bengal Tiger OS (BengalEmpire)
- * @version 0.3.0
+ * @version 0.6.0
  */
 
 #ifndef SCHEDULER_H
@@ -21,65 +20,63 @@
 #define TASK_STATE_BLOCKED  3
 #define TASK_STATE_ZOMBIE   4
 
-/* Maximum tasks (future use) */
+/* Maximum tasks */
 #define MAX_TASKS 64
 
-/* Task structure (for future multitasking) */
+/* Task structure */
 typedef struct task {
-    uint32_t id;                /* Task ID */
+    uint32_t id;                /* Task ID / PID */
     char name[32];              /* Task name */
     uint32_t state;             /* Task state */
-    struct regs regs;           /* Saved CPU registers */
+    struct regs *regs_ptr;      /* Pointer to saved register frame on task stack */
+    void *stack_base;           /* Allocated stack base */
     uint32_t *page_dir;         /* Task's page directory */
-    uint32_t kernel_stack;      /* Kernel stack pointer */
-    uint32_t user_stack;        /* User stack pointer */
     struct task *next;          /* Next task in queue */
     struct task *prev;          /* Previous task in queue */
 } task_t;
 
-/* Global tick counter (from scheduler) */
+/* Global tick counter */
 extern volatile uint32_t tick;
 
 /**
  * Initialize the scheduler.
- * Sets up the initial kernel task.
  */
 void scheduler_init(void);
 
 /**
- * Scheduler tick - called on every timer IRQ.
- * In the future, this will handle task switching.
+ * Scheduler tick - called on every timer IRQ for preemptive context switching.
+ * Returns pointer to the current task's register frame.
  */
-void scheduler_tick(struct regs *r);
+struct regs* scheduler_tick(struct regs *r);
 
 /**
- * Get current task (stub).
+ * Get current task.
  */
 task_t* scheduler_get_current(void);
 
 /**
- * Yield CPU to next task (stub - currently no-op).
+ * Yield CPU to next task.
  */
 void scheduler_yield(void);
 
 /**
- * Add a new task (stub - not implemented).
+ * Create a new kernel task thread.
  */
-int scheduler_add_task(task_t *task);
+task_t* task_create(const char *name, void (*entry_point)(void));
 
 /**
- * Remove a task (stub - not implemented).
+ * Terminate current task execution.
  */
-void scheduler_remove_task(task_t *task);
+void task_exit(void);
 
 /**
- * Block current task (stub - not implemented).
+ * Kill task by PID.
  */
-void scheduler_block(void);
+int task_kill(uint32_t pid);
 
 /**
- * Unblock a task (stub - not implemented).
+ * Get list of tasks.
  */
-void scheduler_unblock(task_t *task);
+task_t* scheduler_get_task_list(int *count);
 
 #endif /* SCHEDULER_H */
