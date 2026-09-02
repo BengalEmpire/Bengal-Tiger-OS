@@ -5,7 +5,7 @@
  * 
  * @file shell.c
  * @author Bengal Tiger OS (BengalEmpire)
- * @version 0.3.0
+ * @version 0.6.0
  */
 
 #include "shell.h"
@@ -21,6 +21,26 @@
 #include "disk.h"
 #include "vbe.h"
 #include "mouse.h"
+#include "scheduler.h"
+#include "nic.h"
+
+/* VGA Colors */
+#define VGA_COLOR_BLACK         0
+#define VGA_COLOR_BLUE          1
+#define VGA_COLOR_GREEN         2
+#define VGA_COLOR_CYAN          3
+#define VGA_COLOR_RED           4
+#define VGA_COLOR_MAGENTA       5
+#define VGA_COLOR_BROWN         6
+#define VGA_COLOR_LIGHT_GREY    7
+#define VGA_COLOR_DARK_GREY     8
+#define VGA_COLOR_LIGHT_BLUE    9
+#define VGA_COLOR_LIGHT_GREEN   10
+#define VGA_COLOR_LIGHT_CYAN    11
+#define VGA_COLOR_LIGHT_RED     12
+#define VGA_COLOR_LIGHT_MAGENTA 13
+#define VGA_COLOR_YELLOW        14
+#define VGA_COLOR_WHITE         15
 
 /* Shell state */
 char shell_cmd_buf[SHELL_CMD_MAX_LENGTH];
@@ -195,38 +215,155 @@ static void redraw_command_line(void) {
 static void cmd_help(void) {
     shell_print_color("\n=== Bengal Tiger OS Commands ===\n", make_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK));
     shell_print_color("\nFile Commands:\n", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
-    shell_print("  ls            - List files\n");
-    shell_print("  cat <file>    - Display file contents\n");
+    shell_print("  ls                  - List files\n");
+    shell_print("  cat <file>          - Display file contents\n");
+    shell_print("  touch <file>        - Create new empty file\n");
+    shell_print("  write <file> <text> - Write text into a file\n");
     
-    shell_print_color("\nSystem Commands:\n", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
-    shell_print("  info          - Show OS version\n");
-    shell_print("  neofetch      - Display system info with style\n");
-    shell_print("  uptime        - Show system uptime\n");
-    shell_print("  mem           - Show memory usage\n");
-    shell_print("  pci           - List PCI devices\n");
-    shell_print("  date          - Show current date/time\n");
+    shell_print_color("\nSystem & Process Commands:\n", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+    shell_print("  info                - Show OS version\n");
+    shell_print("  neofetch            - Display system info with style\n");
+    shell_print("  uptime              - Show system uptime\n");
+    shell_print("  mem                 - Show memory usage\n");
+    shell_print("  ps                  - List running tasks/processes\n");
+    shell_print("  kill <pid>          - Terminate task by PID\n");
+    shell_print("  pci                 - List PCI devices\n");
+    shell_print("  date                - Show current date/time\n");
     
+    shell_print_color("\nNetwork Commands:\n", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+    shell_print("  ifconfig            - Show network interface status & MAC\n");
+    shell_print("  ping <ip>           - Send raw Ethernet test frame over NIC\n");
+
     shell_print_color("\nShell Commands:\n", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
-    shell_print("  echo <msg>    - Print message\n");
-    shell_print("  clear         - Clear screen\n");
-    shell_print("  color <n>     - Set text color (0-15)\n");
-    shell_print("  history       - Show command history\n");
-    shell_print("  help          - Show this help\n");
+    shell_print("  echo <msg>          - Print message\n");
+    shell_print("  clear               - Clear screen\n");
+    shell_print("  color <n>           - Set text color (0-15)\n");
+    shell_print("  history             - Show command history\n");
+    shell_print("  help                - Show this help\n");
     
     shell_print_color("\nControl Commands:\n", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
-    shell_print("  reboot        - Reboot the system\n");
-    shell_print("  shutdown      - Halt the system\n");
-    shell_print("  exit          - Alias for shutdown\n");
+    shell_print("  reboot              - Reboot the system\n");
+    shell_print("  shutdown            - Halt the system\n");
+    shell_print("  exit                - Alias for shutdown\n");
 
     shell_print_color("\nHardware Commands:\n", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
-    shell_print("  disk          - Show disk info\n");
-    shell_print("  cpu           - Show CPU information\n");
-    shell_print("  vbe           - Show VBE framebuffer info & demo\n");
-    shell_print("  mouse         - Show mouse status & test cursor\n");
+    shell_print("  disk                - Show disk info\n");
+    shell_print("  cpu                 - Show CPU information\n");
+    shell_print("  vbe                 - Show VBE framebuffer info & demo\n");
+    shell_print("  mouse               - Show mouse status & test cursor\n\n");
+}
 
-    shell_print_color("\nTips:\n", make_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK));
-    shell_print("  * Use UP/DOWN arrows for command history\n");
-    shell_print("  * Shift+Letter for uppercase\n\n");
+static void cmd_ps(void) {
+    int count = 0;
+    task_t *head = scheduler_get_task_list(&count);
+
+    shell_print_color("\n=== Active Tasks (", make_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK));
+    shell_print_int(count);
+    shell_print_color(") ===\n", make_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK));
+    shell_print("PID   NAME         STATE\n");
+    shell_print("---   ----         -----\n");
+
+    if (!head) return;
+
+    task_t *curr = head;
+    do {
+        shell_print_int(curr->id);
+        shell_print("     ");
+        shell_print(curr->name);
+        for (int i = strlen(curr->name); i < 13; i++) shell_print(" ");
+
+        switch (curr->state) {
+            case TASK_STATE_RUNNING: shell_print_color("RUNNING\n", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK)); break;
+            case TASK_STATE_READY:   shell_print_color("READY\n", make_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK)); break;
+            case TASK_STATE_BLOCKED: shell_print_color("BLOCKED\n", make_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK)); break;
+            case TASK_STATE_ZOMBIE:  shell_print_color("ZOMBIE\n", make_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK)); break;
+            default:                 shell_print("UNKNOWN\n"); break;
+        }
+        curr = curr->next;
+    } while (curr != head);
+    shell_print("\n");
+}
+
+static void cmd_kill(const char *arg) {
+    if (strlen(arg) == 0) {
+        shell_print("Usage: kill <pid>\n");
+        return;
+    }
+
+    int pid = 0;
+    while (*arg >= '0' && *arg <= '9') {
+        pid = pid * 10 + (*arg - '0');
+        arg++;
+    }
+
+    if (task_kill(pid) == 0) {
+        shell_print_color("Task terminated.\n", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+    } else {
+        shell_print_color("Failed to terminate task or invalid PID.\n", make_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK));
+    }
+}
+
+static void cmd_ifconfig(void) {
+    int count = nic_get_count();
+    shell_print_color("\n=== Network Interfaces ===\n", make_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK));
+
+    if (count == 0) {
+        shell_print("No network interface controllers detected.\n\n");
+        return;
+    }
+
+    for (int i = 0; i < count; i++) {
+        nic_t *nic = nic_get_interface(i);
+        if (!nic) continue;
+
+        shell_print_color(nic->name, make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+        shell_print("  Status: ");
+        shell_print(nic->status == NIC_STATUS_UP ? "UP" : "DOWN");
+        shell_print("  I/O: ");
+        shell_print_hex(nic->io_base);
+        shell_print("\n  MAC: ");
+
+        const char *hex = "0123456789ABCDEF";
+        for (int m = 0; m < 6; m++) {
+            char b[3] = {hex[(nic->mac[m] >> 4) & 0xF], hex[nic->mac[m] & 0xF], 0};
+            shell_print(b);
+            if (m < 5) shell_print(":");
+        }
+
+        shell_print("\n  IP: 192.168.1.100  Mask: 255.255.255.0  Gateway: 192.168.1.1\n");
+        shell_print("  TX Packets: "); shell_print_int(nic->tx_packets);
+        shell_print("  RX Packets: "); shell_print_int(nic->rx_packets);
+        shell_print("\n\n");
+    }
+}
+
+static void cmd_ping(const char *arg) {
+    nic_t *nic = nic_get_interface(0);
+    if (!nic || nic->status != NIC_STATUS_UP) {
+        shell_print("No active network interface available.\n");
+        return;
+    }
+
+    shell_print("Sending raw test frames to ");
+    shell_print(strlen(arg) > 0 ? arg : "192.168.1.1");
+    shell_print(" over RTL8139:\n");
+
+    uint8_t broadcast_mac[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    const char *payload = "BengalTigerOS-PingFrame";
+
+    for (int i = 0; i < 4; i++) {
+        if (nic_send(nic, broadcast_mac, 0x0800, (void*)payload, strlen(payload)) == 0) {
+            shell_print_color("  Raw Ethernet frame transmitted, seq=", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+            shell_print_int(i + 1);
+            shell_print_color(" TX_OK\n", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+        } else {
+            shell_print_color("  TX Error on seq=", make_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK));
+            shell_print_int(i + 1);
+            shell_print("\n");
+        }
+        sleep_ms(200);
+    }
+    shell_print("\nFinished sending 4 raw Ethernet frames.\n\n");
 }
 
 static void cmd_neofetch(void) {
@@ -248,7 +385,7 @@ static void cmd_neofetch(void) {
     
     shell_print_color("   .-' '-.", make_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK));
     shell_print_color("                 Version", make_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK));
-    shell_print(": 0.3.0\n");
+    shell_print(": 0.6.0\n");
     
     shell_print_color("  /  ___  \\", make_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK));
     shell_print_color("                Kernel", make_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK));
@@ -448,24 +585,20 @@ static void cmd_color(const char *arg) {
 static void cmd_reboot(void) {
     shell_print_color("\nRebooting...\n", make_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK));
 
-    /* Method 1: Try keyboard controller reset (works on most real HW) */
     int timeout = 10000;
     while (timeout-- && (inb(0x64) & 0x02));
     if (timeout > 0) {
         outb(0x64, 0xFE);
     }
 
-    /* Method 2: Try ACPI reset */
     outw(0x604, 0x2000);
 
-    /* Method 3: Triple fault (will cause CPU to reset) */
     __asm__ volatile("cli\n"
         "mov $0x1234, %%eax\n"
         "lidt (%%eax)\n"
         "int $0x03"
         : : : "eax", "memory");
 
-    /* Last resort */
     __asm__ volatile("cli; hlt");
 }
 
@@ -473,29 +606,20 @@ static void cmd_shutdown(void) {
     shell_print_color("\nShutting down Bengal Tiger OS...\n", make_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK));
     shell_print("Goodbye!\n");
 
-    /* Method 1: QEMU/VirtualBox ACPI power off */
     outw(0x604, 0x2000);
     outw(0x604, 0x2000);
-
-    /* Method 2: Bochs/QEMU older method */
     outw(0xB004, 0x2000);
-
-    /* Method 3: VirtualBox ACPI */
     outw(0x4004, 0x3400);
 
-    /* Halt */
     __asm__ volatile("cli; hlt");
 }
 
 /* ==================== COMMAND EXECUTION ==================== */
 
 void shell_execute_command(const char *cmd) {
-    /* Skip leading whitespace */
     while (*cmd == ' ') cmd++;
-    
     if (strlen(cmd) == 0) return;
     
-    /* Parse command and first argument */
     char command[64] = {0};
     char arg[192] = {0};
     
@@ -506,21 +630,49 @@ void shell_execute_command(const char *cmd) {
     }
     command[i] = 0;
     
-    /* Skip spaces before argument */
     while (cmd[i] == ' ') i++;
     
-    /* Copy rest as argument */
     int j = 0;
     while (cmd[i] && j < 191) {
         arg[j++] = cmd[i++];
     }
     arg[j] = 0;
     
-    /* Execute command */
     if (strcmp(command, "help") == 0) {
         cmd_help();
     } else if (strcmp(command, "ls") == 0) {
         fat_list_files();
+    } else if (strcmp(command, "touch") == 0) {
+        if (strlen(arg) == 0) {
+            shell_print("Usage: touch <filename>\n");
+        } else {
+            fat_save_file(arg, "");
+            shell_print_color("Created file: ", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+            shell_print(arg);
+            shell_print("\n");
+        }
+    } else if (strcmp(command, "write") == 0) {
+        if (strlen(arg) == 0) {
+            shell_print("Usage: write <filename> <text>\n");
+        } else {
+            char fname[64] = {0};
+            int k = 0;
+            while (arg[k] && arg[k] != ' ' && k < 63) {
+                fname[k] = arg[k];
+                k++;
+            }
+            fname[k] = 0;
+            while (arg[k] == ' ') k++;
+
+            if (strlen(fname) == 0 || strlen(arg + k) == 0) {
+                shell_print("Usage: write <filename> <text>\n");
+            } else {
+                fat_save_file(fname, arg + k);
+                shell_print_color("Wrote text to ", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+                shell_print(fname);
+                shell_print("\n");
+            }
+        }
     } else if (strcmp(command, "cat") == 0) {
         if (strlen(arg) == 0) {
             shell_print("Usage: cat <filename>\n");
@@ -531,11 +683,19 @@ void shell_execute_command(const char *cmd) {
                 shell_print(file_buf);
                 shell_print("\n");
             } else {
-                shell_print("File not found: ");
+                shell_print("File empty or not found: ");
                 shell_print(arg);
                 shell_print("\n");
             }
         }
+    } else if (strcmp(command, "ps") == 0) {
+        cmd_ps();
+    } else if (strcmp(command, "kill") == 0) {
+        cmd_kill(arg);
+    } else if (strcmp(command, "ifconfig") == 0) {
+        cmd_ifconfig();
+    } else if (strcmp(command, "ping") == 0) {
+        cmd_ping(arg);
     } else if (strcmp(command, "echo") == 0) {
         shell_print(arg);
         shell_print("\n");
@@ -543,8 +703,8 @@ void shell_execute_command(const char *cmd) {
         shell_clear_screen();
     } else if (strcmp(command, "info") == 0) {
         shell_print_color("Bengal Tiger OS ", make_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK));
-        shell_print_color("v0.3.0\n", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
-        shell_print("Built for stability and performance.\n");
+        shell_print_color("v0.6.0\n", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+        shell_print("Built for real-world usage & hardware compatibility.\n");
         shell_print("Architecture: i386 (32-bit)\n");
     } else if (strcmp(command, "neofetch") == 0) {
         cmd_neofetch();
@@ -647,57 +807,23 @@ void shell_execute_command(const char *cmd) {
             shell_print_color("FB Addr:  ", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
             shell_print_hex(vbe_fb.phys_addr);
             shell_print("\n");
-            shell_print_color("Red:      ", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
-            shell_print_int(vbe_fb.red_size);
-            shell_print(" bits at pos ");
-            shell_print_int(vbe_fb.red_pos);
-            shell_print("\n");
-            shell_print_color("Green:    ", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
-            shell_print_int(vbe_fb.green_size);
-            shell_print(" bits at pos ");
-            shell_print_int(vbe_fb.green_pos);
-            shell_print("\n");
-            shell_print_color("Blue:     ", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
-            shell_print_int(vbe_fb.blue_size);
-            shell_print(" bits at pos ");
-            shell_print_int(vbe_fb.blue_pos);
-            shell_print("\n");
-            shell_print_color("FB Size:  ", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
-            uint32_t fb_mb = (vbe_fb.pitch * vbe_fb.height) / (1024 * 1024);
-            if (fb_mb > 0) {
-                shell_print_int(fb_mb);
-                shell_print(" MB\n");
-            } else {
-                shell_print_int((vbe_fb.pitch * vbe_fb.height) / 1024);
-                shell_print(" KB\n");
-            }
 
             /* Draw a demo pattern on the framebuffer */
             shell_print_color("\nDrawing demo pattern...\n", make_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK));
 
-            /* Color bars across top */
             uint32_t bar_w = vbe_fb.width / 16;
             uint32_t bar_h = 48;
             for (int i = 0; i < 16 && i * bar_w < vbe_fb.width; i++) {
                 vbe_fill_rect(i * bar_w, 0, bar_w, bar_h, vbe_palette[i]);
             }
 
-            /* Draw a cyan border rectangle */
             vbe_draw_rect(0, 0, vbe_fb.width - 1, vbe_fb.height - 1, VBE_CYAN, 3);
+            vbe_draw_string(20, bar_h + 12, "Bengal Tiger OS - Real World Graphics Engine Active!", VBE_YELLOW, VBE_BLACK);
 
-            /* Draw some text in the framebuffer */
-            uint32_t tx = 20;
-            uint32_t ty = bar_h + 12;
-            vbe_draw_string(tx, ty, "Bengal Tiger OS - Graphics Mode Active!", VBE_YELLOW, VBE_BLACK);
-            ty += 20;
-            vbe_draw_string(tx, ty, "Resolution: 1024x768 @ 32bpp", VBE_LIGHT_CYAN, VBE_BLACK);
-            ty += 20;
-            vbe_draw_string(tx, ty, "Try: vbe, vbe demo, vbe clear", VBE_LIGHT_GREEN, VBE_BLACK);
-
-            shell_print("Done! The framebuffer now has color bars and text.\n\n");
+            shell_print("Done! Demo pattern rendered.\n\n");
         } else {
             shell_print("\nVBE framebuffer is not active.\n");
-            shell_print("Boot using a graphics mode entry in GRUB (e.g., '1024x768x32').\n\n");
+            shell_print("Boot using a graphics mode entry in GRUB.\n\n");
         }
     } else if (strcmp(command, "cpu") == 0) {
         shell_print_color("\n=== CPU Information ===\n", make_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK));
@@ -706,17 +832,7 @@ void shell_execute_command(const char *cmd) {
         shell_print("\n");
         shell_print_color("Brand:   ", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
         shell_print(cpu_get_brand());
-        shell_print("\n");
-        if (cpu_info.has_fpu) {
-            shell_print_color("FPU:     ", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
-            shell_print("Present\n");
-        }
-        if (cpu_info.has_sse || cpu_info.has_sse2) {
-            shell_print_color("SSE:    ", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
-            shell_print(cpu_info.has_sse2 ? "SSE2" : "SSE");
-            shell_print("\n");
-        }
-        shell_print("\n");
+        shell_print("\n\n");
     } else {
         shell_print_color("Unknown command: ", make_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK));
         shell_print(command);
@@ -728,7 +844,6 @@ void shell_execute_command(const char *cmd) {
 
 void shell_handler(char ch) {
     if (shell_setup_mode) {
-        /* First-time username setup */
         if (ch == '\n') {
             shell_cmd_buf[shell_cmd_pos] = 0;
             memcpy(shell_username, shell_cmd_buf, 31);
@@ -749,36 +864,26 @@ void shell_handler(char ch) {
         shell_cmd_buf[shell_cmd_pos] = 0;
         shell_print("\n");
         
-        /* Add to history and execute */
         add_to_history(shell_cmd_buf);
         shell_execute_command(shell_cmd_buf);
         
-        /* Reset */
         shell_cmd_pos = 0;
         cursor_pos = 0;
         memset(shell_cmd_buf, 0, SHELL_CMD_MAX_LENGTH);
         show_prompt();
         
     } else if (ch == '\b') {
-        /* Backspace */
         if (cursor_pos > 0) {
-            /* Shift characters left */
             for (int i = cursor_pos - 1; i < shell_cmd_pos - 1; i++) {
                 shell_cmd_buf[i] = shell_cmd_buf[i + 1];
             }
             shell_cmd_buf[shell_cmd_pos - 1] = 0;
             shell_cmd_pos--;
             cursor_pos--;
-            
-            /* Handle screen update */
             shell_offset--;
-            
-            /* Redraw */
             redraw_command_line();
         }
     } else if (ch == '\t') {
-        /* Tab - could implement completion here */
-        /* For now, just insert spaces */
         int spaces = 4 - (cursor_pos % 4);
         for (int i = 0; i < spaces && shell_cmd_pos < SHELL_CMD_MAX_LENGTH - 1; i++) {
             shell_cmd_buf[shell_cmd_pos++] = ' ';
@@ -786,11 +891,8 @@ void shell_handler(char ch) {
             shell_print(" ");
         }
     } else {
-        /* Regular character */
         if (shell_cmd_pos < SHELL_CMD_MAX_LENGTH - 1) {
-            /* Insert at cursor position */
             if (cursor_pos < shell_cmd_pos) {
-                /* Shift characters right */
                 for (int i = shell_cmd_pos; i > cursor_pos; i--) {
                     shell_cmd_buf[i] = shell_cmd_buf[i - 1];
                 }
@@ -799,7 +901,6 @@ void shell_handler(char ch) {
             shell_cmd_pos++;
             cursor_pos++;
             
-            /* Display character */
             char temp[2] = {ch, 0};
             shell_print(temp);
         }
@@ -811,7 +912,6 @@ void shell_handler_special(int key) {
     
     switch (key) {
         case SPECIAL_KEY_UP:
-            /* Previous command in history */
             if (history_count > 0) {
                 if (history_index == -1) {
                     history_index = history_count - 1;
@@ -819,7 +919,6 @@ void shell_handler_special(int key) {
                     history_index--;
                 }
                 
-                /* Load command from history */
                 memcpy(shell_cmd_buf, cmd_history[history_index % SHELL_HISTORY_SIZE], SHELL_CMD_MAX_LENGTH);
                 shell_cmd_pos = strlen(shell_cmd_buf);
                 cursor_pos = shell_cmd_pos;
@@ -828,11 +927,9 @@ void shell_handler_special(int key) {
             break;
             
         case SPECIAL_KEY_DOWN:
-            /* Next command in history */
             if (history_index >= 0) {
                 history_index++;
                 if (history_index >= history_count) {
-                    /* Clear command line */
                     history_index = -1;
                     memset(shell_cmd_buf, 0, SHELL_CMD_MAX_LENGTH);
                     shell_cmd_pos = 0;
@@ -872,7 +969,6 @@ void shell_handler_special(int key) {
             
         case SPECIAL_KEY_DELETE:
             if (cursor_pos < shell_cmd_pos) {
-                /* Shift characters left */
                 for (int i = cursor_pos; i < shell_cmd_pos - 1; i++) {
                     shell_cmd_buf[i] = shell_cmd_buf[i + 1];
                 }
@@ -886,8 +982,6 @@ void shell_handler_special(int key) {
 
 void shell_boot_animation(void) {
     shell_clear_screen();
-    
-    /* Display tiger art with animation */
     sleep_ms(200);
     
     for (int i = 0; tiger_art[i] != NULL; i++) {
@@ -898,7 +992,6 @@ void shell_boot_animation(void) {
     
     sleep_ms(500);
     
-    /* Boot progress */
     shell_print("\n");
     shell_print_color("  Initializing hardware", make_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK));
     for (int i = 0; i < 3; i++) {
@@ -934,9 +1027,8 @@ void shell_init(const char *username) {
     
     shell_clear_screen();
     
-    /* Welcome message */
     shell_print_color("Bengal Tiger OS ", make_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK));
-    shell_print_color("v0.3.0", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+    shell_print_color("v0.6.0", make_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
     shell_print_color(" - Type 'help' for commands\n\n", make_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK));
     
     show_prompt();

@@ -1,7 +1,7 @@
 /**
  * Bengal Tiger OS - FAT Filesystem Driver
  * 
- * Supports FAT12 and FAT16 reading.
+ * Supports FAT12 and FAT16 reading, writing, file creation, and multi-cluster chaining.
  * 
  * @file fat.c
  * @author Bengal Tiger OS (BengalEmpire)
@@ -86,7 +86,7 @@ void fat_init(void) {
     
     uint32_t total_sectors = (boot_sector.total_sectors_16 == 0) ? boot_sector.total_sectors_32 : boot_sector.total_sectors_16;
     uint32_t data_sectors = total_sectors - data_start_sector;
-    uint32_t total_clusters = data_sectors / boot_sector.sectors_per_cluster;
+    uint32_t total_clusters = data_sectors / (boot_sector.sectors_per_cluster ? boot_sector.sectors_per_cluster : 1);
     
     if (total_clusters < 4085) {
         fat_type = 12;
@@ -96,17 +96,11 @@ void fat_init(void) {
 }
 
 static uint32_t get_fat_entry(uint32_t cluster) {
-    uint32_t fat_offset;
-    if (fat_type == 12) {
-        fat_offset = cluster + (cluster / 2);
-    } else {
-        fat_offset = cluster * 2;
-    }
-    
+    uint32_t fat_offset = (fat_type == 12) ? (cluster + (cluster / 2)) : (cluster * 2);
     uint32_t sector = fat_start_sector + (fat_offset / 512);
     uint32_t offset = fat_offset % 512;
     
-    uint8_t buf[1024]; /* Read 2 sectors to handle entries spanning boundaries */
+    uint8_t buf[1024];
     if (ata_read_sector(sector, buf) != 0) return 0x0FFFFFF7;
     if (offset > 510) {
         if (ata_read_sector(sector + 1, buf + 512) != 0) return 0x0FFFFFF7;
@@ -125,6 +119,50 @@ static uint32_t get_fat_entry(uint32_t cluster) {
     }
     
     return next_cluster;
+}
+
+static void set_fat_entry(uint32_t cluster, uint32_t value) {
+    uint32_t fat_offset = (fat_type == 12) ? (cluster + (cluster / 2)) : (cluster * 2);
+    uint32_t sector = fat_start_sector + (fat_offset / 512);
+    uint32_t offset = fat_offset % 512;
+
+    uint8_t buf[1024];
+    if (ata_read_sector(sector, buf) != 0) return;
+    if (offset > 510) {
+        if (ata_read_sector(sector + 1, buf + 512) != 0) return;
+    }
+
+    if (fat_type == 12) {
+        uint16_t entry = *(uint16_t*)&buf[offset];
+        if (cluster & 0x0001) {
+            entry = (entry & 0x000F) | ((value & 0x0FFF) << 4);
+        } else {
+            entry = (entry & 0xF000) | (value & 0x0FFF);
+        }
+        *(uint16_t*)&buf[offset] = entry;
+    } else {
+        *(uint16_t*)&buf[offset] = (uint16_t)(value & 0xFFFF);
+    }
+
+    /* Write back to all FAT tables */
+    for (uint8_t f = 0; f < boot_sector.num_fats; f++) {
+        uint32_t fat_sec = fat_start_sector + (f * boot_sector.fat_size_16) + (fat_offset / 512);
+        ata_write_sector(fat_sec, buf);
+        if (offset > 510) {
+            ata_write_sector(fat_sec + 1, buf + 512);
+        }
+    }
+}
+
+static uint32_t allocate_cluster(void) {
+    uint32_t max_clusters = (fat_type == 12) ? 4084 : 65524;
+    for (uint32_t c = 2; c < max_clusters; c++) {
+        if (get_fat_entry(c) == 0x0000) {
+            set_fat_entry(c, (fat_type == 12) ? 0x0FFF : 0xFFFF);
+            return c;
+        }
+    }
+    return 0;
 }
 
 static int filename_to_fat(const char *name, char *fat_name) {
@@ -148,7 +186,7 @@ static int filename_to_fat(const char *name, char *fat_name) {
     return 0;
 }
 
-static fat_dirent_t* find_dirent(const char *name) {
+static fat_dirent_t* find_dirent(const char *name, uint32_t *out_sector, uint32_t *out_index) {
     char fat_name[11];
     filename_to_fat(name, fat_name);
     
@@ -163,8 +201,10 @@ static fat_dirent_t* find_dirent(const char *name) {
             if (entries[i].attr & FAT_ATTR_VOLUME_ID) continue;
             
             if (memcmp(entries[i].name, fat_name, 11) == 0) {
-                fat_dirent_t *res = kmalloc(sizeof(fat_dirent_t));
+                fat_dirent_t *res = (fat_dirent_t*)kmalloc(sizeof(fat_dirent_t));
                 memcpy(res, &entries[i], sizeof(fat_dirent_t));
+                if (out_sector) *out_sector = root_start_sector + s;
+                if (out_index) *out_index = i;
                 return res;
             }
         }
@@ -173,7 +213,7 @@ static fat_dirent_t* find_dirent(const char *name) {
 }
 
 int fat_file_exists(const char *name) {
-    fat_dirent_t *ent = find_dirent(name);
+    fat_dirent_t *ent = find_dirent(name, NULL, NULL);
     if (ent) {
         kfree(ent);
         return 1;
@@ -182,7 +222,7 @@ int fat_file_exists(const char *name) {
 }
 
 void fat_load_file(const char *name, void *buf) {
-    fat_dirent_t *ent = find_dirent(name);
+    fat_dirent_t *ent = find_dirent(name, NULL, NULL);
     if (!ent) {
         memset(buf, 0, 512);
         return;
@@ -193,9 +233,9 @@ void fat_load_file(const char *name, void *buf) {
     uint32_t bytes_left = ent->size;
     
     while (cluster < (fat_type == 12 ? 0x0FF8 : 0xFFF8) && bytes_left > 0) {
-        uint32_t sector = data_start_sector + (cluster - 2) * boot_sector.sectors_per_cluster;
+        uint32_t sector = data_start_sector + (cluster - 2) * (boot_sector.sectors_per_cluster ? boot_sector.sectors_per_cluster : 1);
         
-        for (int s = 0; s < boot_sector.sectors_per_cluster && bytes_left > 0; s++) {
+        for (int s = 0; s < (boot_sector.sectors_per_cluster ? boot_sector.sectors_per_cluster : 1) && bytes_left > 0; s++) {
             uint8_t sector_buf[512];
             ata_read_sector(sector + s, sector_buf);
             
@@ -213,9 +253,98 @@ void fat_load_file(const char *name, void *buf) {
 }
 
 void fat_save_file(const char *name, void *buf) {
-    /* TODO: Real write support */
-    UNUSED(name);
-    UNUSED(buf);
+    if (!name || !buf) return;
+
+    uint32_t len = strlen((const char*)buf);
+    uint32_t target_sector = 0;
+    uint32_t target_index = 0;
+
+    fat_dirent_t *ent = find_dirent(name, &target_sector, &target_index);
+    uint32_t first_cluster = 0;
+
+    if (!ent) {
+        char fat_name[11];
+        filename_to_fat(name, fat_name);
+
+        uint8_t sec_buf[512];
+        int found_slot = 0;
+
+        for (uint32_t s = 0; s < root_sectors && !found_slot; s++) {
+            if (ata_read_sector(root_start_sector + s, sec_buf) != 0) break;
+            fat_dirent_t *entries = (fat_dirent_t*)sec_buf;
+
+            for (int i = 0; i < 16; i++) {
+                if ((uint8_t)entries[i].name[0] == 0x00 || (uint8_t)entries[i].name[0] == 0xE5) {
+                    memset(&entries[i], 0, sizeof(fat_dirent_t));
+                    memcpy(entries[i].name, fat_name, 11);
+                    entries[i].attr = FAT_ATTR_ARCHIVE;
+
+                    first_cluster = allocate_cluster();
+                    entries[i].cluster_low = first_cluster & 0xFFFF;
+                    entries[i].cluster_high = (first_cluster >> 16) & 0xFFFF;
+                    entries[i].size = len;
+
+                    ata_write_sector(root_start_sector + s, sec_buf);
+                    found_slot = 1;
+                    break;
+                }
+            }
+        }
+        if (!found_slot) return;
+    } else {
+        first_cluster = ent->cluster_low | (ent->cluster_high << 16);
+        if (first_cluster < 2) {
+            first_cluster = allocate_cluster();
+            ent->cluster_low = first_cluster & 0xFFFF;
+            ent->cluster_high = (first_cluster >> 16) & 0xFFFF;
+        }
+        ent->size = len;
+
+        uint8_t sec_buf[512];
+        if (ata_read_sector(target_sector, sec_buf) == 0) {
+            fat_dirent_t *entries = (fat_dirent_t*)sec_buf;
+            entries[target_index] = *ent;
+            ata_write_sector(target_sector, sec_buf);
+        }
+        kfree(ent);
+    }
+
+    if (first_cluster < 2) return;
+
+    /* Write data across chained clusters */
+    uint32_t bytes_written = 0;
+    uint32_t current_cluster = first_cluster;
+    uint8_t *src_ptr = (uint8_t*)buf;
+
+    while (bytes_written < len || (len == 0 && bytes_written == 0)) {
+        uint32_t sector = data_start_sector + (current_cluster - 2) * (boot_sector.sectors_per_cluster ? boot_sector.sectors_per_cluster : 1);
+
+        for (int s = 0; s < (boot_sector.sectors_per_cluster ? boot_sector.sectors_per_cluster : 1); s++) {
+            uint8_t write_buf[512];
+            memset(write_buf, 0, 512);
+
+            uint32_t chunk = 0;
+            if (bytes_written < len) {
+                chunk = (len - bytes_written > 512) ? 512 : (len - bytes_written);
+                memcpy(write_buf, src_ptr + bytes_written, chunk);
+            }
+
+            ata_write_sector(sector + s, write_buf);
+            bytes_written += chunk;
+
+            if (bytes_written >= len && len > 0) break;
+        }
+
+        if (bytes_written >= len) {
+            set_fat_entry(current_cluster, (fat_type == 12) ? 0x0FFF : 0xFFFF);
+            break;
+        }
+
+        uint32_t next = allocate_cluster();
+        if (next == 0) break;
+        set_fat_entry(current_cluster, next);
+        current_cluster = next;
+    }
 }
 
 void fat_list_files(void) {
@@ -232,7 +361,6 @@ void fat_list_files(void) {
             if ((uint8_t)entries[i].name[0] == 0xE5) continue;
             if (entries[i].attr & FAT_ATTR_VOLUME_ID) continue;
             
-            /* Print name.ext */
             char name[13];
             int p = 0;
             for (int k = 0; k < 8; k++) if (entries[i].name[k] != ' ') name[p++] = entries[i].name[k];

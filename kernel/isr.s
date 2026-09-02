@@ -150,7 +150,8 @@ irq_common:
     
     call irq_handler
     
-    pop %eax
+    mov %eax, %esp      # Switch ESP to returned register frame (task switch support)
+
     pop %gs
     pop %fs
     pop %es
