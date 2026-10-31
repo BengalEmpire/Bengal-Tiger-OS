@@ -79,6 +79,8 @@ Line editing supports **Left/Right/Home/End/Delete**, **Up/Down command history*
 - [Project Roadmap](docs/ROADMAP.md)
 - [Changelog](CHANGELOG.md)
 
+ > Want to test the OS? [Checkout docs](https://github.com/BengalEmpire/Bengal-Tiger-OS/blob/main/docs/TESTING_GUIDE.md)
+
 ## License
 
 Released under the [MIT License](licence). Copyright (c) BengalEmpire.
