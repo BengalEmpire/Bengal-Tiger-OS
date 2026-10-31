@@ -1,320 +1,120 @@
-# Bengal Tiger OS - Makefile
-# 
-# Build system for Bengal Tiger OS kernel
-# Supports: make all, make clean, make run, make iso
-#
-# Author: Bengal Tiger OS Team
-# Version: 0.3.0
+# ============================================================================
+# Bengal Tiger OS v1.0.0 - Build & Verification System
+# ============================================================================
 
-# ==============================================================================
-# TOOLCHAIN CONFIGURATION
-# ==============================================================================
+CC        = gcc
+AS        = as
+LD        = ld
+GRUB_MK   = grub-mkrescue
+QEMU      = qemu-system-i386
+PYTHON    = python3
 
-CC      = gcc
-LD      = ld
-AS      = gcc
-NASM    = nasm
+CFLAGS    = -m32 -ffreestanding -O2 -Wall -Wextra -Werror \
+            -fno-pie -fno-stack-protector -fno-builtin \
+            -nostdlib -nostdinc -Ikernel
+ASFLAGS   = --32
+LDFLAGS   = -m elf_i386 -T linker.ld -nostdlib
 
-# Compiler flags for 32-bit freestanding kernel
-CFLAGS  = -m32 \
-          -I./kernel \
-          -fno-pic \
-          -fno-builtin \
-          -nostdlib \
-          -nostartfiles \
-          -nodefaultlibs \
-          -fno-stack-protector \
-          -Wall \
-          -Wextra \
-          -Werror=implicit-function-declaration \
-          -O2 \
-          -g
+BUILD_DIR = build
+ISO_DIR   = isodir
+KERNEL    = $(BUILD_DIR)/kernel.bin
+ISO       = bengaltiger.iso
 
-# Assembler flags
-ASFLAGS = -m32 -g -c
+BOOT_OBJ  = $(BUILD_DIR)/boot.o
+ISR_OBJ   = $(BUILD_DIR)/isr_asm.o
 
-# Linker flags for i386 ELF
-LDFLAGS = -m elf_i386 --no-warn-rwx-segments
+C_SOURCES = \
+	kernel/main.c \
+	kernel/common.c \
+	kernel/klog.c \
+	kernel/serial.c \
+	kernel/panic.c \
+	kernel/cpu.c \
+	kernel/gdt.c \
+	kernel/idt.c \
+	kernel/isr.c \
+	kernel/pic.c \
+	kernel/timer.c \
+	kernel/rtc.c \
+	kernel/paging.c \
+	kernel/heap.c \
+	kernel/vbe.c \
+	kernel/font.c \
+	kernel/keyboard.c \
+	kernel/mouse.c \
+	kernel/disk.c \
+	kernel/fat.c \
+	kernel/pci.c \
+	kernel/nic.c \
+	kernel/net.c \
+	kernel/scheduler.c \
+	kernel/editor.c \
+	kernel/shell.c
 
-# ==============================================================================
-# SOURCE FILES
-# ==============================================================================
+C_OBJS   = $(patsubst kernel/%.c,$(BUILD_DIR)/%.o,$(C_SOURCES))
+ALL_OBJS = $(BOOT_OBJ) $(ISR_OBJ) $(C_OBJS)
 
-# Assembly sources
-ASM_SOURCES = boot/boot.s \
-              kernel/isr.s
+.PHONY: all kernel iso run run-serial run-disk check-multiboot test-unit test-qemu test clean
 
-# C sources - Core
-C_SOURCES = kernel/main.c \
-            kernel/common.c \
-            kernel/idt.c \
-            kernel/isr.c \
-            kernel/pic.c
-
-# C sources - Memory Management
-C_SOURCES += kernel/paging.c \
-             kernel/heap.c
-
-# C sources - Drivers
-C_SOURCES += kernel/keyboard.c \
-             kernel/timer.c \
-             kernel/disk.c \
-             kernel/fat.c \
-             kernel/pci.c \
-             kernel/nic.c
-
-# C sources - CPU / System
-C_SOURCES += kernel/cpu.c \
-             kernel/gdt.c
-
-# C sources - Drivers
-C_SOURCES += kernel/rtc.c \
-             kernel/serial.c \
-             kernel/mouse.c
-
-# C sources - Graphics / Font
-C_SOURCES += kernel/vbe.c \
-             kernel/font.c
-
-# C sources - Subsystems
-C_SOURCES += kernel/scheduler.c \
-             kernel/shell.c \
-             kernel/panic.c
-
-# ==============================================================================
-# OBJECT FILES
-# ==============================================================================
-
-# Generate object file names from sources
-ASM_OBJECTS = $(patsubst %.s,build/%.o,$(notdir $(ASM_SOURCES)))
-C_OBJECTS   = $(patsubst %.c,build/%.o,$(notdir $(C_SOURCES)))
-OBJECTS     = $(ASM_OBJECTS) $(C_OBJECTS)
-
-# Object files in order for linking
-OBJS = build/boot.o \
-       build/main.o \
-       build/common.o \
-       build/idt.o \
-       build/isr.o \
-       build/isr_c.o \
-       build/pic.o \
-       build/paging.o \
-       build/heap.o \
-       build/cpu.o \
-       build/gdt.o \
-       build/rtc.o \
-       build/serial.o \
-       build/mouse.o \
-       build/keyboard.o \
-       build/timer.o \
-       build/disk.o \
-       build/fat.o \
-       build/vbe.o \
-       build/font.o \
-       build/scheduler.o \
-       build/shell.o \
-       build/pci.o \
-       build/nic.o \
-       build/panic.o
-
-# ==============================================================================
-# PHONY TARGETS
-# ==============================================================================
-
-.PHONY: all clean build iso run debug help
-
-# ==============================================================================
-# BUILD TARGETS
-# ==============================================================================
-
-all: build bengaltiger.iso
-	@echo ""
-	@echo "============================================"
-	@echo "  Bengal Tiger OS build complete!"
-	@echo "  ISO: bengaltiger.iso"
-	@echo "  Run: make run"
-	@echo "============================================"
-
-build:
-	@mkdir -p build
-	@mkdir -p iso/boot/grub
-
-help:
-	@echo "Bengal Tiger OS Build System"
-	@echo ""
-	@echo "Targets:"
-	@echo "  all     - Build the kernel and create ISO"
-	@echo "  clean   - Remove all build artifacts"
-	@echo "  run     - Run in QEMU"
-	@echo "  debug   - Run in QEMU with GDB server"
-	@echo "  iso     - Create bootable ISO"
-	@echo "  help    - Show this help message"
-
-# ==============================================================================
-# COMPILATION RULES
-# ==============================================================================
-
-# Boot assembly
-build/boot.o: boot/boot.s
-	$(AS) $(ASFLAGS) -o $@ $<
-
-# ISR assembly
-build/isr.o: kernel/isr.s
-	$(AS) $(ASFLAGS) -o $@ $<
-
-# Main kernel
-build/main.o: kernel/main.c
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-# Common utilities
-build/common.o: kernel/common.c
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-# IDT
-build/idt.o: kernel/idt.c
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-# ISR C handlers (named isr_c.o to avoid conflict with isr.o)
-build/isr_c.o: kernel/isr.c
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-# PIC
-build/pic.o: kernel/pic.c
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-# Keyboard driver
-build/keyboard.o: kernel/keyboard.c
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-# Timer driver
-build/timer.o: kernel/timer.c
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-# Paging
-build/paging.o: kernel/paging.c
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-# Heap allocator
-build/heap.o: kernel/heap.c
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-# Disk driver
-build/disk.o: kernel/disk.c
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-# FAT filesystem
-build/fat.o: kernel/fat.c
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-# CPU init
-build/cpu.o: kernel/cpu.c
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-# GDT
-build/gdt.o: kernel/gdt.c
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-# RTC
-build/rtc.o: kernel/rtc.c
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-# Serial
-build/serial.o: kernel/serial.c
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-# Mouse
-build/mouse.o: kernel/mouse.c
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-# Scheduler
-build/scheduler.o: kernel/scheduler.c
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-# Shell
-build/shell.o: kernel/shell.c
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-# PCI bus
-build/pci.o: kernel/pci.c
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-# Network driver
-build/nic.o: kernel/nic.c
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-# VBE framebuffer
-build/vbe.o: kernel/vbe.c
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-# Font data
-build/font.o: kernel/font.c
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-# Panic handler
-build/panic.o: kernel/panic.c
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-# ==============================================================================
-# LINKING
-# ==============================================================================
-
-build/kernel.bin: $(OBJS) linker.ld
-	$(LD) $(LDFLAGS) -T linker.ld -o $@ $(OBJS)
-	@echo "Kernel size: $$(stat -c %s $@ 2>/dev/null || stat -f %z $@) bytes"
-
-# ==============================================================================
-# ISO CREATION
-# ==============================================================================
-
-iso: build/kernel.bin build
-	@cp build/kernel.bin iso/boot/kernel.bin
-	@cp grub/grub.cfg iso/boot/grub/grub.cfg
-	# Create config file for first boot detection
-	@dd if=/dev/zero of=iso/boot/config.cfg bs=512 count=1 2>/dev/null
-	@echo "Welcome to Bengal Tiger OS filesystem!" > iso/boot/hello.txt
-
-bengaltiger.iso: iso
-	@echo "Creating bootable ISO..."
-	@if command -v grub-mkrescue >/dev/null 2>&1 && command -v mformat >/dev/null 2>&1; then \
-		grub-mkrescue -o bengaltiger.iso iso; \
-	elif command -v xorriso >/dev/null 2>&1; then \
-		xorriso -as mkisofs -o bengaltiger.iso -c boot.cat \
-			-b boot/grub/i386-pc/eltorito.img -no-emul-boot \
-			-boot-load-size 4 -boot-info-table iso; \
+all: $(KERNEL)
+	@if command -v $(GRUB_MK) >/dev/null 2>&1; then \
+		$(MAKE) --no-print-directory iso; \
 	else \
-		echo "WARNING: grub-mkrescue (with mtools) or xorriso not found. ISO not created."; \
-		echo "Kernel binary is available at build/kernel.bin"; \
+		echo "[INFO] Built $(KERNEL) (install grub-pc-bin + xorriso to build $(ISO))"; \
 	fi
 
-# ==============================================================================
-# RUNNING / DEBUGGING
-# ==============================================================================
+kernel: $(KERNEL)
 
-# Run in QEMU with FAT disk emulation for persistence
-run: bengaltiger.iso
-	qemu-system-i386 \
-		-cdrom bengaltiger.iso \
-		-m 512M \
-		-drive file=fat:rw:iso/boot,format=raw \
-		-boot d \
-		-vga std
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)
 
-# Run with debug server enabled
-debug: bengaltiger.iso
-	qemu-system-i386 \
-		-cdrom bengaltiger.iso \
-		-m 512M \
-		-drive file=fat:rw:iso/boot,format=raw \
-		-boot d \
-		-s -S \
-		-vga std
+$(BOOT_OBJ): boot/boot.s | $(BUILD_DIR)
+	$(AS) $(ASFLAGS) $< -o $@
 
-# ==============================================================================
-# CLEANUP
-# ==============================================================================
+$(ISR_OBJ): kernel/isr.s | $(BUILD_DIR)
+	$(AS) $(ASFLAGS) $< -o $@
+
+$(BUILD_DIR)/%.o: kernel/%.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(KERNEL): $(ALL_OBJS) linker.ld
+	$(LD) $(LDFLAGS) -o $@ $(ALL_OBJS)
+
+iso: $(KERNEL)
+	mkdir -p $(ISO_DIR)/boot/grub
+	cp $(KERNEL) $(ISO_DIR)/boot/kernel.bin
+	cp grub/grub.cfg $(ISO_DIR)/boot/grub/grub.cfg
+	$(GRUB_MK) -o $(ISO) $(ISO_DIR)
+
+check-multiboot: $(KERNEL)
+	$(PYTHON) tests/verify_kernel_binary.py $(KERNEL)
+
+test-unit: $(BUILD_DIR)
+	$(CC) -O2 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+		-DHOST_TEST -Ikernel \
+		tests/test_host.c \
+		kernel/common.c \
+		kernel/klog.c \
+		kernel/heap.c \
+		kernel/fat.c \
+		kernel/net.c \
+		-o $(BUILD_DIR)/test_host
+	./$(BUILD_DIR)/test_host
+
+test-qemu: $(ISO)
+	$(PYTHON) tests/qemu_smoke_test.py $(ISO)
+
+test: check-multiboot test-unit
+
+run: $(ISO)
+	$(QEMU) -cdrom $(ISO) -m 64M -netdev user,id=n0 -device e1000,netdev=n0 -serial stdio
+
+run-serial: $(ISO)
+	$(QEMU) -cdrom $(ISO) -m 64M -netdev user,id=n0 -device e1000,netdev=n0 -nographic
+
+run-disk: $(ISO)
+	@test -f disk.img || dd if=/dev/zero of=disk.img bs=1M count=32
+	$(QEMU) -cdrom $(ISO) -hda disk.img -boot d -m 64M -netdev user,id=n0 -device e1000,netdev=n0 -serial stdio
 
 clean:
-	rm -rf build
-	rm -rf iso
-	rm -f bengaltiger.iso
-	@echo "Cleaned all build artifacts."
+	rm -rf $(BUILD_DIR) $(ISO_DIR) $(ISO) SHA256SUMS.txt

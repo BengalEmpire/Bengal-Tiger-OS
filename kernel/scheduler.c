@@ -1,18 +1,15 @@
 /**
  * Bengal Tiger OS - Preemptive Task Scheduler Implementation
  *
- * Implements circular linked list task queue, thread creation, context switching,
- * and task lifecycle management.
- * 
  * @file scheduler.c
  * @author Bengal Tiger OS (BengalEmpire)
- * @version 0.6.0
+ * @version 1.0.0
  */
 
 #include "scheduler.h"
 #include "common.h"
 #include "heap.h"
-#include "serial.h"
+#include "klog.h"
 
 #define STACK_SIZE 8192
 
@@ -20,52 +17,75 @@ volatile uint32_t tick = 0;
 
 static task_t kernel_task;
 static task_t *current_task = NULL;
-static task_t *task_head = NULL;
-static uint32_t next_pid = 1;
+static task_t *task_head    = NULL;
+static uint32_t next_pid    = 1;
 
 void scheduler_init(void) {
+    uint32_t irq = irq_save();
+
     memset(&kernel_task, 0, sizeof(task_t));
-    kernel_task.id = 0;
+    kernel_task.id    = 0;
     strcpy(kernel_task.name, "kernel");
     kernel_task.state = TASK_STATE_RUNNING;
-    kernel_task.next = &kernel_task;
-    kernel_task.prev = &kernel_task;
+    kernel_task.next  = &kernel_task;
+    kernel_task.prev  = &kernel_task;
 
     current_task = &kernel_task;
-    task_head = &kernel_task;
+    task_head    = &kernel_task;
+    next_pid     = 1;
+
+    irq_restore(irq);
 }
 
 task_t* task_create(const char *name, void (*entry_point)(void)) {
-    task_t *t = (task_t*)kmalloc(sizeof(task_t));
-    if (!t) return NULL;
+    if (!entry_point || !task_head) return NULL;
 
-    memset(t, 0, sizeof(task_t));
-    t->id = next_pid++;
-    strncpy(t->name, name, 31);
-    t->state = TASK_STATE_READY;
+    uint32_t irq = irq_save();
 
-    void *stack = kmalloc(STACK_SIZE);
-    if (!stack) {
-        kfree(t);
+    /* Enforce MAX_TASKS */
+    int count = 0;
+    scheduler_get_task_list(&count);
+    if (count >= MAX_TASKS) {
+        irq_restore(irq);
         return NULL;
     }
-    memset(stack, 0, STACK_SIZE);
+
+    task_t *t = (task_t*)kzalloc(sizeof(task_t));
+    if (!t) {
+        irq_restore(irq);
+        return NULL;
+    }
+
+    void *stack = kzalloc(STACK_SIZE);
+    if (!stack) {
+        kfree(t);
+        irq_restore(irq);
+        return NULL;
+    }
+
+    t->id = next_pid++;
+    strncpy(t->name, name ? name : "thread", 31);
+    t->name[31]   = '\0';
+    t->state      = TASK_STATE_READY;
+    t->cpu_ticks  = 0;
     t->stack_base = stack;
 
-    /* Setup initial register frame on task stack for irq_common restore */
-    uint32_t *top = (uint32_t*)((uint32_t)stack + STACK_SIZE);
+    /* Align stack top to 16 bytes for System V i386 ABI */
+    uint32_t *top = (uint32_t*)ALIGN_DOWN((uint32_t)stack + STACK_SIZE, 16);
 
-    /* Return address for task if function returns */
+    /* Return address when entry_point() returns */
     top--; *top = (uint32_t)task_exit;
 
-    /* Fake iret frame: eflags, cs, eip */
-    top--; *top = 0x202;                /* eflags (IF=1) */
-    top--; *top = 0x08;                 /* cs */
-    top--; *top = (uint32_t)entry_point;/* eip */
+    /* Hardware iret frame (ring 0 -> ring 0): eflags, cs, eip */
+    top--; *top = 0x00000202U;          /* EFLAGS (IF=1, reserved bit 1=1) */
+    top--; *top = 0x08U;                /* CS (kernel code) */
+    top--; *top = (uint32_t)entry_point;/* EIP */
+
+    /* ISR stub frame: err_code, int_no */
+    top--; *top = 0;
+    top--; *top = 0;
 
     /* pusha frame: eax, ecx, edx, ebx, esp, ebp, esi, edi */
-    top--; *top = 0;                    /* err_code */
-    top--; *top = 0;                    /* int_no */
     top--; *top = 0;                    /* eax */
     top--; *top = 0;                    /* ecx */
     top--; *top = 0;                    /* edx */
@@ -76,24 +96,23 @@ task_t* task_create(const char *name, void (*entry_point)(void)) {
     top--; *top = 0;                    /* esi */
     top--; *top = 0;                    /* edi */
 
-    /* segment selectors: ds, es, fs, gs */
-    top--; *top = 0x10;                 /* ds */
-    top--; *top = 0x10;                 /* es */
-    top--; *top = 0x10;                 /* fs */
-    top--; *top = 0x10;                 /* gs */
+    /* Segment registers: ds, es, fs, gs */
+    top--; *top = 0x10U;
+    top--; *top = 0x10U;
+    top--; *top = 0x10U;
+    top--; *top = 0x10U;
 
     t->regs_ptr = (struct regs*)top;
 
-    /* Insert into circular doubly linked list */
+    /* Insert at tail of circular doubly-linked list */
     t->next = task_head;
     t->prev = task_head->prev;
     task_head->prev->next = t;
     task_head->prev = t;
 
-    serial_write_str("Scheduler: Created task ");
-    serial_write_str(t->name);
-    serial_write_str("\n");
+    irq_restore(irq);
 
+    klog_writeln("sched", t->name);
     return t;
 }
 
@@ -111,17 +130,23 @@ void task_exit(void) {
 int task_kill(uint32_t pid) {
     if (pid == 0) return -1;
 
-    task_t *t = task_head;
-    if (!t) return -1;
+    uint32_t irq = irq_save();
+    if (!task_head) {
+        irq_restore(irq);
+        return -1;
+    }
 
+    task_t *t = task_head;
     do {
-        if (t->id == pid) {
+        if (t->id == pid && t->state != TASK_STATE_ZOMBIE) {
             t->state = TASK_STATE_ZOMBIE;
+            irq_restore(irq);
             return 0;
         }
         t = t->next;
     } while (t != task_head);
 
+    irq_restore(irq);
     return -1;
 }
 
@@ -146,15 +171,12 @@ task_t* scheduler_get_task_list(int *count) {
     return task_head;
 }
 
-struct regs* scheduler_tick(struct regs *r) {
-    tick++;
+struct regs* scheduler_schedule(struct regs *r) {
+    if (!current_task || !task_head) return r;
 
-    if (!current_task) return r;
-
-    /* Save register pointer for current task */
     current_task->regs_ptr = r;
 
-    /* Clean up zombie tasks */
+    /* Reap zombie tasks (other than the currently executing stack!) */
     task_t *curr = task_head->next;
     while (curr != task_head) {
         task_t *next = curr->next;
@@ -167,13 +189,17 @@ struct regs* scheduler_tick(struct regs *r) {
         curr = next;
     }
 
-    /* Select next task */
+    /* Round-robin selection */
     task_t *next_task = current_task->next;
-    while (next_task != current_task && next_task->state != TASK_STATE_READY && next_task->state != TASK_STATE_RUNNING) {
+    while (next_task != current_task &&
+           next_task->state != TASK_STATE_READY &&
+           next_task->state != TASK_STATE_RUNNING) {
         next_task = next_task->next;
     }
 
-    if (next_task == current_task && current_task->state != TASK_STATE_RUNNING && current_task->state != TASK_STATE_READY) {
+    if (next_task == current_task &&
+        current_task->state != TASK_STATE_RUNNING &&
+        current_task->state != TASK_STATE_READY) {
         next_task = &kernel_task;
     }
 
@@ -181,7 +207,6 @@ struct regs* scheduler_tick(struct regs *r) {
         if (current_task->state == TASK_STATE_RUNNING) {
             current_task->state = TASK_STATE_READY;
         }
-
         current_task = next_task;
         current_task->state = TASK_STATE_RUNNING;
     }
@@ -189,6 +214,21 @@ struct regs* scheduler_tick(struct regs *r) {
     return current_task->regs_ptr;
 }
 
+struct regs* scheduler_tick(struct regs *r) {
+    tick++;
+    if (current_task) {
+        current_task->cpu_ticks++;
+    }
+    return scheduler_schedule(r);
+}
+
 void scheduler_yield(void) {
-    __asm__ volatile("int $32");
+    /* Invoke SYS_YIELD (158) via INT 0x80 so PIC EOI & PIT ticks aren't perturbed */
+    __asm__ volatile(
+        "mov $158, %%eax\n\t"
+        "int $0x80"
+        :
+        :
+        : "eax", "memory"
+    );
 }

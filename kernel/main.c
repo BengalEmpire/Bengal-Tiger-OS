@@ -1,304 +1,120 @@
 /**
- * Bengal Tiger OS - Kernel Main Entry Point
- * 
- * This is the main kernel initialization code that sets up all
- * hardware, initializes subsystems, and starts the shell.
- * 
+ * Bengal Tiger OS - Kernel Entry Point & Boot Orchestrator
+ *
+ * Initializes all hardware drivers, memory managers, filesystems, networking,
+ * and preemptive multitasking in strict dependency order before launching
+ * the interactive shell.
+ *
  * @file main.c
  * @author Bengal Tiger OS (BengalEmpire)
- * @version 0.4.0
+ * @version 1.0.0
  */
 
-#include "common.h"
+#include "version.h"
 #include "multiboot.h"
-#include "gdt.h"
+#include "common.h"
+#include "serial.h"
+#include "klog.h"
+#include "panic.h"
 #include "cpu.h"
+#include "gdt.h"
 #include "idt.h"
 #include "pic.h"
-#include "keyboard.h"
 #include "paging.h"
+#include "heap.h"
+#include "timer.h"
+#include "rtc.h"
+#include "vbe.h"
+#include "keyboard.h"
+#include "mouse.h"
 #include "disk.h"
 #include "fat.h"
-#include "scheduler.h"
-#include "shell.h"
 #include "pci.h"
 #include "nic.h"
-#include "timer.h"
-#include "heap.h"
-#include "panic.h"
-#include "rtc.h"
-#include "serial.h"
-#include "vbe.h"
-#include "mouse.h"
+#include "net.h"
+#include "scheduler.h"
+#include "shell.h"
 
-/* External symbols from linker */
-extern uint32_t bss_end;
+extern uint8_t bss_end[];
 
-/* Kernel Information */
-#define KERNEL_NAME     "Bengal Tiger OS"
-#define KERNEL_VERSION  "0.4.0"
-#define KERNEL_ARCH     "i386"
+void kmain(multiboot_info_t *mboot, uint32_t magic) {
+    /* Phase 0: Early Serial UART & Kernel Ring Log */
+    serial_init(COM1_PORT, 115200);
+    klog_init();
 
-/* Boot flags and framebuffer state */
-static int first_boot = 0;
-static uint32_t total_memory = 0;
-static int vbe_available = 0;
+    serial_write_str("\n========================================================\n");
+    serial_write_str("  " OS_NAME " v" OS_VERSION " (" OS_CODENAME ") Booting...\n");
+    serial_write_str("========================================================\n");
 
-/* Saved multiboot info for memory map parsing */
-static multiboot_info_t *saved_mbi = NULL;
-
-/**
- * Print boot progress message
- */
-static void boot_log(const char *component, const char *status) {
-    serial_write_str("  [");
-    serial_write_str(status);
-    serial_write_str("] ");
-    serial_write_str(component);
-    serial_write_str("\n");
-
-    shell_print_color("  [", 0x07);
-    if (strcmp(status, "OK") == 0) {
-        shell_print_color(status, 0x0A);
-    } else if (strcmp(status, "FAIL") == 0) {
-        shell_print_color(status, 0x0C);
-    } else {
-        shell_print_color(status, 0x0E);
-    }
-    shell_print_color("] ", 0x07);
-    shell_print(component);
-    shell_print("\n");
-}
-
-/**
- * Parse the multiboot memory map and calculate physical memory size.
- */
-static uint32_t parse_memory_map(multiboot_info_t *mbi) {
-    uint32_t total = 0;
-
-    if (!(mbi->flags & (1 << 6)) || mbi->mmap_length == 0) {
-        if (mbi->flags & 0x01) {
-            total = (mbi->mem_upper * 1024) + 0x100000;
-        } else {
-            total = 16 * 1024 * 1024;
-        }
-        boot_log("Memory (fallback)", "WARN");
-        return total;
+    if (magic != MULTIBOOT_BOOTLOADER_MAGIC || !mboot) {
+        PANIC("Invalid Multiboot magic number from bootloader");
     }
 
-    multiboot_mmap_entry_t *entry = multiboot_mmap_first(mbi);
-    while (multiboot_mmap_has_more(mbi, entry)) {
-        if (entry->type == MULTIBOOT_MMAP_AVAILABLE) {
-            total += (uint32_t)entry->len;
-        }
-        entry = multiboot_mmap_next(entry);
-    }
-
-    if (total == 0) {
-        total = 16 * 1024 * 1024;
-    }
-
-    return total;
-}
-
-/**
- * Kernel Main Entry Point
- * 
- * Called by boot.s after multiboot bootloader hands off control.
- * 
- * @param mbi Pointer to multiboot information structure
- */
-void kmain(multiboot_info_t *mbi) {
-    saved_mbi = mbi;
-
-    /* ============================================ */
-    /* Phase 1: CPU Initialization                 */
-    /* ============================================ */
-
-    if (a20_enable()) {
-        boot_log("A20 Gate", "OK");
-    } else {
-        boot_log("A20 Gate", "FAIL");
-    }
+    /* Phase 1: CPU, GDT, 8259A PIC & IDT (Exceptions + IRQs + INT 0x80) */
+    cpu_init();
+    klog_writeln("cpu", cpu_get_brand()[0] ? cpu_get_brand() : cpu_get_vendor());
 
     gdt_init();
-    boot_log("GDT", "OK");
-
-    cpu_init();
-    boot_log("CPU Features", "OK");
-    if (cpu_info.has_fpu) {
-        boot_log("FPU", "OK");
-    }
-    if (cpu_info.has_sse || cpu_info.has_sse2) {
-        boot_log("SSE/SSE2", "OK");
-    }
-
-    /* ============================================ */
-    /* Phase 2: Critical Hardware                  */
-    /* ============================================ */
-
     pic_remap();
-    boot_log("PIC", "OK");
-
+    pic_unmask_irq(4); /* Enable COM1 serial RX interrupt */
     idt_install();
-    boot_log("IDT", "OK");
+    klog_writeln("core", "GDT, IDT, INT 0x80 syscalls & 8259A PIC initialized");
 
-    /* ============================================ */
-    /* Phase 3: Memory Management                  */
-    /* ============================================ */
-
-    total_memory = parse_memory_map(mbi);
-
-    /* Reserve memory for Page Directory and initial Page Tables.
-     * We allocate 1 page for PD and 4 pages for PTs (covers 16MB). */
-    uint32_t kernel_end = (uint32_t)&bss_end;
-    uint32_t pmm_start = ALIGN_UP(kernel_end, PAGE_SIZE) + (5 * PAGE_SIZE);
-    
-    pmm_init(total_memory, pmm_start);
-    boot_log("PMM", "OK");
-
-    paging_install(total_memory);
-    boot_log("Paging", "OK");
-
-    heap_init();
-    boot_log("Heap", "OK");
-
-    /* VBE Framebuffer init: must be after paging so we
-     * can map the framebuffer physical address into our
-     * page tables (it's often above 4GB physical space). */
-    vbe_available = vbe_init(
-        mbi->flags,
-        mbi->framebuffer_addr,
-        mbi->framebuffer_pitch,
-        mbi->framebuffer_width,
-        mbi->framebuffer_height,
-        mbi->framebuffer_bpp,
-        mbi->framebuffer_type,
-        mbi->framebuffer_red_field_position,
-        mbi->framebuffer_red_mask_size,
-        mbi->framebuffer_green_field_position,
-        mbi->framebuffer_green_mask_size,
-        mbi->framebuffer_blue_field_position,
-        mbi->framebuffer_blue_mask_size
-    );
-    if (vbe_available) {
-        boot_log("VBE Framebuffer", "OK");
-    } else {
-        boot_log("VBE Framebuffer", "text");
+    /* Phase 2: E820 Physical Memory Manager, Paging & Dynamic Kernel Heap */
+    uint32_t total_mem_bytes = multiboot_total_memory(mboot);
+    uint32_t k_end = (uint32_t)(uintptr_t)bss_end;
+    uint32_t heap_base = ALIGN_UP(k_end + 0x10000U, 0x100000U);
+    if (heap_base < HEAP_START) {
+        heap_base = HEAP_START;
     }
-    
-    /* ============================================ */
-    /* Phase 4: Device Drivers                     */
-    /* ============================================ */
 
-    serial_init(COM1_PORT, 115200);
-    boot_log("Serial", "OK");
+    pmm_init_mmap(mboot, total_mem_bytes, heap_base + HEAP_INITIAL_SIZE);
+    paging_install(total_mem_bytes);
+    heap_init_at((void*)(uintptr_t)heap_base, HEAP_INITIAL_SIZE, HEAP_MAX_SIZE);
+    klog_writeln("mm", "E820 PMM, 32MB identity paging & expandable heap online");
 
+    /* Phase 3: PIT System Timer, CMOS RTC & VBE/VGA Display */
     timer_init();
-    boot_log("Timer", "OK");
-
-    keyboard_init();
-    boot_log("Keyboard", "OK");
-
     rtc_init();
-    boot_log("RTC", "OK");
+    if (vbe_init(mboot->flags,
+                 mboot->framebuffer_addr,
+                 mboot->framebuffer_pitch,
+                 mboot->framebuffer_width,
+                 mboot->framebuffer_height,
+                 mboot->framebuffer_bpp,
+                 mboot->framebuffer_type,
+                 mboot->framebuffer_red_field_position,
+                 mboot->framebuffer_red_mask_size,
+                 mboot->framebuffer_green_field_position,
+                 mboot->framebuffer_green_mask_size,
+                 mboot->framebuffer_blue_field_position,
+                 mboot->framebuffer_blue_mask_size)) {
+        klog_writeln("video", "VBE linear framebuffer initialized");
+    } else {
+        klog_writeln("video", "VGA 80x25 text mode active");
+    }
+
+    /* Phase 4: PS/2 Input, ATA/RAMDisk Storage, FAT12/16, PCI & NIC */
+    keyboard_init();
+    mouse_init();
+    klog_writeln("input", "PS/2 keyboard, mouse & COM1 serial input ready");
 
     disk_init();
-    if (ata_disk_present()) {
-        boot_log("ATA Disk", "OK");
-    } else {
-        boot_log("ATA Disk", "WARN");
-    }
-
     fat_init();
-    boot_log("FAT", "OK");
-
-    scheduler_init();
-    boot_log("Scheduler", "OK");
 
     pci_init();
-    boot_log("PCI Scan", "OK");
-
+    net_init();
     nic_init();
-    boot_log("NIC", "OK");
-    
-    mouse_init();
-    if (mouse_is_present()) {
-        boot_log("PS/2 Mouse", "OK");
-    } else {
-        boot_log("PS/2 Mouse", "WARN");
-    }
-    
-    /* ============================================ */
-    /* Phase 5: Enable Interrupts                  */
-    /* ============================================ */
-    __asm__ volatile("sti");
-    boot_log("Interrupts", "OK");
 
-    /* ============================================ */
-    /* Phase 6: User Configuration & Setup         */
-    /* ============================================ */
-    
-    uint8_t config[512];
-    memset(config, 0, 512);
-    fat_load_file("config.cfg", config);
-    
-    char username[32] = {0};
-    
-    /* Check if this is first boot (config empty) */
-    if (config[0] == 0xFF || config[0] == 0x00) {
-        first_boot = 1;
-        
-        /* Display boot animation */
-        shell_boot_animation();
-        
-        /* First-time setup */
-        shell_print_color("\n\nWelcome to Bengal Tiger OS!\n\n", 0x0E);
-        shell_print("Please enter your username: ");
-        shell_setup_mode = 1;
-        
-        /* Wait for setup to complete */
-        while (shell_setup_mode) {
-            __asm__ volatile("hlt");
-        }
-        
-        /* Save configuration */
-        memcpy(username, shell_username, 31);
-        memset(config, 0, 512);
-        memcpy(config, username, strlen(username));
-        fat_save_file("config.cfg", config);
-        
-    } else {
-        /* Load existing username */
-        memcpy(username, config, 31);
-        
-        /* Show brief boot animation */
-        shell_boot_animation();
-        
-        /* Initialize shell with loaded username */
-        sleep_ms(500);
-        shell_init(username);
-    }
-    
-    /* ============================================ */
-    /* Phase 7: Main Idle Loop                     */
-    /* ============================================ */
+    /* Phase 5: Preemptive Scheduler, Interrupts & Network Autoconfig */
+    scheduler_init();
+    klog_writeln("sched", "Preemptive round-robin task scheduler active");
 
-    serial_write_str("\n*** Bengal Tiger OS boot complete ***\n");
-    serial_write_str("Version: 0.4.0 | Architecture: i386\n");
-    serial_write_str("Ready. Waiting for input...\n");
+    sti();
 
-    while (1) {
-        /* Update mouse cursor on framebuffer if needed */
-        mouse_update_cursor();
-        __asm__ volatile("hlt");
-    }
-}
+    net_autoconfig();
 
-uint32_t get_total_memory(void) {
-    return total_memory;
-}
-
-int is_first_boot(void) {
-    return first_boot;
+    /* Launch Interactive Shell */
+    shell_init();
+    shell_run();
 }

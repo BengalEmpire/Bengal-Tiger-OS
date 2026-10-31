@@ -1,15 +1,16 @@
 /**
- * Bengal Tiger OS - Enhanced Keyboard Driver
- * 
- * Full PS/2 keyboard driver with:
- * - Shift, Caps Lock, Ctrl, Alt support
- * - Function keys detection
- * - Key repeat handling
- * - Ring buffer for asynchronous input
- * 
+ * Bengal Tiger OS - Enhanced PS/2 Keyboard & Unified Input Driver
+ *
+ * Full Scancode Set 1 + 0xE0 extended scancode support, Ctrl/Shift/Alt/Caps/Num
+ * modifiers, and unified non-blocking event queue combining PS/2 keyboard and
+ * COM1 serial console ANSI escape sequences.
+ *
+ * IMPORTANT: Interrupt handlers ONLY enqueue events; command execution runs
+ * in normal thread context with interrupts enabled (IF=1).
+ *
  * @file keyboard.h
  * @author Bengal Tiger OS (BengalEmpire)
- * @version 0.3.0
+ * @version 1.0.0
  */
 
 #ifndef KEYBOARD_H
@@ -17,7 +18,6 @@
 
 #include "common.h"
 
-/* Keyboard I/O Ports */
 #define KB_DATA_PORT        0x60
 #define KB_STATUS_PORT      0x64
 #define KB_COMMAND_PORT     0x64
@@ -42,8 +42,6 @@
 #define SC_F8               0x42
 #define SC_F9               0x43
 #define SC_F10              0x44
-#define SC_F11              0x57
-#define SC_F12              0x58
 #define SC_NUM_LOCK         0x45
 #define SC_SCROLL_LOCK      0x46
 #define SC_HOME             0x47
@@ -56,14 +54,29 @@
 #define SC_PAGE_DOWN        0x51
 #define SC_INSERT           0x52
 #define SC_DELETE           0x53
+#define SC_F11              0x57
+#define SC_F12              0x58
 
-/* Key Release Bit */
 #define SC_RELEASE_BIT      0x80
+#define KB_BUFFER_SIZE      128
 
-/* Ring Buffer Size (must be power of 2) */
-#define KB_BUFFER_SIZE      64
+/* High-level input event codes (> 255 for special navigation keys) */
+#define KEY_NONE            0
+#define KEY_SPECIAL_UP      1001
+#define KEY_SPECIAL_DOWN    1002
+#define KEY_SPECIAL_LEFT    1003
+#define KEY_SPECIAL_RIGHT   1004
+#define KEY_SPECIAL_HOME    1005
+#define KEY_SPECIAL_END     1006
+#define KEY_SPECIAL_DELETE  1007
+#define KEY_SPECIAL_PGUP    1008
+#define KEY_SPECIAL_PGDN    1009
+#define KEY_SPECIAL_F1      1010
+#define KEY_SPECIAL_F2      1011
 
-/* Modifier Key Flags */
+/* Ctrl+Key ASCII control codes */
+#define CTRL_KEY(c)         ((c) & 0x1F)
+
 typedef struct {
     uint8_t shift    : 1;
     uint8_t ctrl     : 1;
@@ -74,71 +87,32 @@ typedef struct {
     uint8_t reserved : 2;
 } keyboard_modifiers_t;
 
-/* Extended Key Code (includes modifiers) */
 typedef struct {
-    char ascii;             /* ASCII character (0 if special key) */
-    uint8_t scancode;       /* Raw scancode */
-    keyboard_modifiers_t mods;  /* Modifier state at key press */
+    char ascii;
+    uint8_t scancode;
+    keyboard_modifiers_t mods;
 } keycode_t;
 
-/* Global Modifier State */
 extern keyboard_modifiers_t kb_modifiers;
 
-/**
- * Initialize the keyboard driver.
- * Sets up IRQ1 handler and clears the keyboard buffer.
- */
 void keyboard_init(void);
-
-/**
- * Keyboard install - alias for keyboard_init.
- */
 void keyboard_install(void);
-
-/**
- * Keyboard interrupt handler - called by IRQ1.
- */
 void keyboard_handler(void);
 
-/**
- * Check if a key is available in the buffer.
- * @return 1 if key available, 0 otherwise
- */
-int keyboard_has_key(void);
-
-/**
- * Get next key from buffer (blocking).
- * Waits until a key is available.
- * @return ASCII character (or 0 for special keys)
- */
+int  keyboard_has_key(void);
 char keyboard_getchar(void);
-
-/**
- * Get next key from buffer (non-blocking).
- * @return ASCII character, or 0 if no key available
- */
 char keyboard_getchar_nonblock(void);
+int  keyboard_get_keycode(keycode_t *key);
 
-/**
- * Get full keycode from buffer (includes modifiers).
- * @param key Pointer to keycode structure to fill
- * @return 1 if key retrieved, 0 if buffer empty
- */
-int keyboard_get_keycode(keycode_t *key);
+/* Unified event API (PS/2 + Serial COM1 ANSI sequences) */
+int  input_poll_event(void);
+int  input_wait_event(void);
 
-/**
- * Check if a specific modifier is active.
- */
 int keyboard_is_shift_pressed(void);
 int keyboard_is_ctrl_pressed(void);
 int keyboard_is_alt_pressed(void);
 int keyboard_is_caps_on(void);
 
-/**
- * Convert scancode to ASCII based on current modifiers.
- * @param scancode The scancode to convert
- * @return ASCII character, or 0 if no mapping
- */
 char scancode_to_ascii(uint8_t scancode);
 
 #endif /* KEYBOARD_H */

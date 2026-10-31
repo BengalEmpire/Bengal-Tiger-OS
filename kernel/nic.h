@@ -1,11 +1,16 @@
 /**
- * Bengal Tiger OS - Network Interface Controller Driver
- * 
- * Support for Realtek RTL8139 NIC with hardware RX/TX ring buffers.
- * 
+ * Bengal Tiger OS - Network Interface Controller (NIC) Driver
+ *
+ * Dual-driver architecture supporting:
+ *   1. Intel PRO/1000 (E1000: 82540EM / 82545EM / 82574L) — QEMU, VirtualBox, VMware default
+ *   2. Realtek RTL8139 Fast Ethernet — Classic PCI Ethernet
+ *
+ * Uses static identity-mapped DMA rings (guaranteed physical == virtual below 32MB)
+ * and supports both PCI IRQ reception and lock-free polling.
+ *
  * @file nic.h
  * @author Bengal Tiger OS (BengalEmpire)
- * @version 0.6.0
+ * @version 1.0.0
  */
 
 #ifndef NIC_H
@@ -13,77 +18,42 @@
 
 #include "common.h"
 
-/* NIC Status */
-#define NIC_STATUS_DOWN     0
-#define NIC_STATUS_UP       1
-#define NIC_STATUS_ERROR    2
+#define NIC_NONE    0
+#define NIC_E1000   1
+#define NIC_RTL8139 2
 
-/* MAC Address size */
-#define MAC_SIZE 6
+/* Intel E1000 PCI IDs */
+#define INTEL_VENDOR_ID         0x8086
+#define E1000_DEV_82540EM       0x100E
+#define E1000_DEV_82545EM       0x100F
+#define E1000_DEV_82574L        0x10D3
 
-/* Network Interface Structure */
+/* Realtek RTL8139 PCI IDs */
+#define RTL8139_VENDOR_ID       0x10EC
+#define RTL8139_DEVICE_ID       0x8139
+
 typedef struct {
-    char name[16];              /* Interface name (e.g., "eth0") */
-    uint8_t mac[MAC_SIZE];      /* MAC address */
-    uint32_t ip_addr;           /* IP address (if configured) */
-    uint32_t netmask;           /* Subnet mask */
-    uint32_t gateway;           /* Default gateway */
-    uint8_t status;             /* Interface status */
-    uint16_t io_base;           /* I/O port base address */
-    uint8_t irq;                /* Hardware IRQ */
-    
-    /* Statistics */
-    uint32_t tx_packets;        /* Packets transmitted */
-    uint32_t rx_packets;        /* Packets received */
-    uint32_t tx_bytes;          /* Bytes transmitted */
-    uint32_t rx_bytes;          /* Bytes received */
-    uint32_t tx_errors;         /* Transmit errors */
-    uint32_t rx_errors;         /* Receive errors */
-} nic_t;
+    int      initialized;
+    int      driver_type;       /* NIC_NONE, NIC_E1000, NIC_RTL8139 */
+    char     driver_name[24];
+    uint16_t io_base;
+    uint32_t mmio_phys;
+    volatile uint8_t *mmio_base;
+    uint8_t  irq;
+    uint8_t  mac[6];
+    int      link_up;
+    uint32_t tx_packets;
+    uint32_t rx_packets;
+    uint32_t tx_bytes;
+    uint32_t rx_bytes;
+} nic_state_t;
 
-/**
- * Initialize network drivers.
- * Scans PCI bus for RTL8139 NIC.
- */
-void nic_init(void);
+extern nic_state_t nic_state;
 
-/**
- * Get network interface by index.
- * @param index Interface index
- * @return Pointer to NIC structure, or NULL
- */
-nic_t* nic_get_interface(int index);
-
-/**
- * Get number of available NICs.
- */
-int nic_get_count(void);
-
-/**
- * Send an Ethernet frame over RTL8139 NIC.
- * 
- * @param nic Network interface
- * @param dest_mac Destination MAC address
- * @param type Ethernet type (0x0800 = IPv4, 0x0806 = ARP)
- * @param data Frame payload
- * @param len Payload length
- * @return 0 on success, -1 on error
- */
-int nic_send(nic_t *nic, uint8_t *dest_mac, uint16_t type, void *data, uint32_t len);
-
-/**
- * Receive an Ethernet frame.
- * 
- * @param nic Network interface
- * @param buffer Receive buffer
- * @param max_len Maximum length to receive
- * @return Number of bytes received, or -1 on error
- */
-int nic_receive(nic_t *nic, void *buffer, uint32_t max_len);
-
-/**
- * Print MAC address in human-readable format.
- */
-void nic_print_mac(uint8_t *mac);
+int  nic_init(void);
+int  nic_send_packet(const void *data, uint16_t length);
+void nic_poll(void);
+void nic_handle_irq(uint8_t irq);
+void nic_get_mac(uint8_t *mac_out);
 
 #endif /* NIC_H */
