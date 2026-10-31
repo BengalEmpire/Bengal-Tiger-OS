@@ -1,9 +1,13 @@
 /**
- * Bengal Tiger OS - Enhanced Shell Header
- * 
+ * Bengal Tiger OS - Interactive Shell, Console & Graphical Workspace
+ *
+ * Unified console engine rendering simultaneously to VBE linear framebuffers,
+ * VGA 80x25 text memory, and COM1 serial terminals, paired with a full
+ * real-world command suite.
+ *
  * @file shell.h
  * @author Bengal Tiger OS (BengalEmpire)
- * @version 0.6.0
+ * @version 1.0.0
  */
 
 #ifndef SHELL_H
@@ -11,71 +15,30 @@
 
 #include "common.h"
 
-/* Shell configuration */
-#define SHELL_CMD_MAX_LENGTH 256
-#define SHELL_HISTORY_SIZE   16
+/* Low-level Console Grid Primitives (used by shell, editor, top) */
+int  console_cols(void);
+int  console_rows(void);
+void console_clear_cells(uint8_t attr);
+void console_put_cell(int col, int row, char ch, uint8_t attr);
+void console_set_cursor(int col, int row, int visible);
+void console_refresh_topbar(void);
 
-/* Special keys */
-#define SPECIAL_KEY_UP       1001
-#define SPECIAL_KEY_DOWN     1002
-#define SPECIAL_KEY_LEFT     1003
-#define SPECIAL_KEY_RIGHT    1004
-#define SPECIAL_KEY_HOME     1005
-#define SPECIAL_KEY_END      1006
-#define SPECIAL_KEY_DELETE   1007
+/* Shell Lifecycle & Main Thread Loop */
+void shell_init(void);
+void shell_run(void) __attribute__((noreturn));
+void shell_handle_event(int ev);
+void shell_execute_line(const char *line);
 
-/* Shell state variables */
-extern char shell_username[32];
-extern int shell_setup_mode;
-
-/**
- * Initialize shell.
- */
-void shell_init(const char *username);
-
-/**
- * Handle incoming character from keyboard.
- */
-void shell_handler(char ch);
-
-/**
- * Handle special keys (arrows, home, end, etc.).
- */
-void shell_handler_special(int key);
-
-/**
- * Execute command string.
- */
-void shell_execute_command(const char *cmd);
-
-/**
- * Print text to shell terminal.
- */
-void shell_print(const char *s);
-
-/**
- * Print text with VGA color attribute.
- */
-void shell_print_color(const char *s, uint8_t color);
-
-/**
- * Print integer to terminal.
- */
+/* Output Helpers */
+void shell_clear(void);
+void shell_putchar(char c);
+void shell_print(const char *str);
+void shell_print_color(const char *str, uint8_t color);
 void shell_print_int(int num);
-
-/**
- * Print hexadecimal number.
- */
 void shell_print_hex(uint32_t num);
+void shell_print_prompt(void);
 
-/**
- * Clear terminal screen.
- */
-void shell_clear_screen(void);
-
-/**
- * Play boot logo animation.
- */
-void shell_boot_animation(void);
+/* Legacy IRQ-safe compatibility wrapper */
+void shell_handler(char key);
 
 #endif /* SHELL_H */

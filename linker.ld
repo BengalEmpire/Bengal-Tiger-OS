@@ -2,25 +2,36 @@ ENTRY(start)
 
 SECTIONS
 {
-	. = 0x00100000; /* Link the kernel at 1MB (0x00100000) */
+    . = 0x00100000; /* Link the kernel at 1MB (0x00100000) */
 
-	.text : AT(ADDR(.text))
-	{
-		KEEP(*(.multiboot)) /* Place the multiboot header FIRST */
-		*(.text)
-		*(.rodata)
-	}
+    .text ALIGN(4096) : AT(ADDR(.text))
+    {
+        KEEP(*(.multiboot)) /* Multiboot header MUST reside within first 8KB */
+        *(.text .text.*)
+    }
 
-	.data : {
-		*(.data)
-	}
+    .rodata ALIGN(4096) : AT(ADDR(.rodata))
+    {
+        *(.rodata .rodata.*)
+    }
 
-	.bss : {
-		*(.bss)
-		*(COMMON)
-		/* *** CRITICAL FIX: DEFINE THE bss_end SYMBOL *** */
-		PROVIDE(bss_end = .); 
-	}
+    .data ALIGN(4096) : AT(ADDR(.data))
+    {
+        *(.data .data.*)
+    }
 
-	/DISCARD/ : { *(.eh_frame) *(.comment) }
+    .bss ALIGN(4096) : AT(ADDR(.bss))
+    {
+        *(.bss .bss.*)
+        *(COMMON)
+        . = ALIGN(4096);
+        PROVIDE(bss_end = .);
+    }
+
+    /DISCARD/ :
+    {
+        *(.eh_frame)
+        *(.comment)
+        *(.note.gnu.property)
+    }
 }

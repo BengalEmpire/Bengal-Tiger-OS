@@ -8,8 +8,6 @@
 # --- GLOBAL FUNCTIONS ---
 .global idt_load
 
-# --- MACRO DEFINITIONS (MUST BE FIRST) ---
-
 # Macro for Interrupts with NO error code (pushes dummy 0)
 .macro ISR_NOERRCODE num
 .global isr\num
@@ -34,7 +32,7 @@ isr\num:
 .global irq\num
 irq\num:
     cli
-    push $0         # Push dummy error code
+    push $0          # Push dummy error code
     push $\idt_index # Push IDT index (32-47)
     jmp irq_common
 .endm
@@ -67,7 +65,7 @@ ISR_ERRCODE   17
 ISR_NOERRCODE 18
 ISR_NOERRCODE 19
 ISR_NOERRCODE 20
-ISR_NOERRCODE 21
+ISR_ERRCODE   21
 ISR_NOERRCODE 22
 ISR_NOERRCODE 23
 ISR_NOERRCODE 24
@@ -76,11 +74,10 @@ ISR_NOERRCODE 26
 ISR_NOERRCODE 27
 ISR_NOERRCODE 28
 ISR_NOERRCODE 29
-ISR_NOERRCODE 30
+ISR_ERRCODE   30
 ISR_NOERRCODE 31
 
-# --- HARDWARE INTERRUPTS (IRQs) ---
-# Map IRQ 0-15 to IDT 32-47
+# --- HARDWARE INTERRUPTS (IRQs 0-15 -> IDT 32-47) ---
 IRQ 0, 32
 IRQ 1, 33
 IRQ 2, 34
@@ -98,59 +95,62 @@ IRQ 13, 45
 IRQ 14, 46
 IRQ 15, 47
 
-# --- SYSTEM CALL (User Mode) ---
+# --- SYSTEM CALL (INT 0x80) ---
 ISR_NOERRCODE 128
 
 # --- COMMON HANDLERS ---
 
-# Common ISR Stub
+# Common ISR & Syscall Stub (supports task switch via returned regs pointer)
 isr_common:
-    pusha               # Pushes edi, esi, ebp, esp, ebx, edx, ecx, eax
+    pusha
     push %ds
     push %es
     push %fs
     push %gs
-    
-    mov $0x10, %ax      # Load Kernel Data Segment descriptor
+
+    cld
+    mov $0x10, %ax
     mov %ax, %ds
     mov %ax, %es
     mov %ax, %fs
     mov %ax, %gs
-    
-    mov %esp, %eax      # Push pointer to stack (struct regs)
+
+    mov %esp, %eax
     push %eax
-    
-    call isr_handler    # Call C function
-    
-    pop %eax            # Pop stack pointer
+
+    call isr_handler
+
+    mov %eax, %esp
+
     pop %gs
     pop %fs
     pop %es
     pop %ds
     popa
-    add $8, %esp        # Cleans up the pushed error code and ISR number
+    add $8, %esp
     iret
 
-# Common IRQ Stub
+# Common IRQ Stub (supports preemptive task switch via returned regs pointer)
 irq_common:
     pusha
     push %ds
     push %es
     push %fs
     push %gs
-    
+
+    cld
     mov $0x10, %ax
     mov %ax, %ds
     mov %ax, %es
     mov %ax, %fs
     mov %ax, %gs
-    
+
     mov %esp, %eax
     push %eax
-    
+
     call irq_handler
-    
-    mov %eax, %esp      # Switch ESP to returned register frame (task switch support)
+
+    mov %eax, %esp
 
     pop %gs
     pop %fs

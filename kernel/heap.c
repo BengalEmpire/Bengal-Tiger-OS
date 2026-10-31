@@ -1,151 +1,177 @@
 /**
- * Bengal Tiger OS - Kernel Heap Allocator Implementation
- * 
- * First-fit free-list allocator with immediate coalescing.
- * 
+ * Bengal Tiger OS - Interrupt-Safe Expandable Kernel Heap Implementation
+ *
  * @file heap.c
  * @author Bengal Tiger OS (BengalEmpire)
- * @version 0.3.0
+ * @version 1.0.0
  */
 
 #include "heap.h"
 #include "common.h"
+#ifdef __i386__
+#include "paging.h"
+#endif
 
-/* Global heap statistics */
 heap_stats_t heap_stats = {0, 0, 0, 0, 0};
 
-/* Head of free list */
 static heap_block_t *heap_head = NULL;
+static uintptr_t heap_base_addr = HEAP_START;
+static uint32_t heap_cur_size   = 0;
+static uint32_t heap_max_limit  = HEAP_MAX_SIZE;
 
-/* Heap bounds */
-static uint32_t heap_start = HEAP_START;
-
-/* Minimum block size to prevent excessive fragmentation */
 #define MIN_BLOCK_SIZE 16
+#define HEADER_SIZE    ((uint32_t)((sizeof(heap_block_t) + 7) & ~7))
 
-/* Header size aligned to 8 bytes */
-#define HEADER_SIZE ((sizeof(heap_block_t) + 7) & ~7)
+void heap_init_at(void *base, uint32_t initial_size, uint32_t max_size) {
+    uint32_t irq = irq_save();
 
-void heap_init(void) {
-    /* Initialize the heap as one large free block */
-    heap_head = (heap_block_t *)heap_start;
-    
-    heap_head->magic = HEAP_BLOCK_MAGIC;
-    heap_head->size = HEAP_INITIAL_SIZE - HEADER_SIZE;
+    heap_base_addr = (uintptr_t)base;
+    heap_cur_size  = initial_size;
+    heap_max_limit = max_size;
+
+    heap_head = (heap_block_t *)heap_base_addr;
+    heap_head->magic   = HEAP_BLOCK_MAGIC;
+    heap_head->size    = initial_size - HEADER_SIZE;
     heap_head->is_free = 1;
-    heap_head->next = NULL;
-    heap_head->prev = NULL;
+    heap_head->next    = NULL;
+    heap_head->prev    = NULL;
 
-    /* Initialize statistics */
-    heap_stats.total_size = HEAP_INITIAL_SIZE;
-    heap_stats.free_size = heap_head->size;
-    heap_stats.used_size = 0;
+    heap_stats.total_size      = initial_size;
+    heap_stats.free_size       = heap_head->size;
+    heap_stats.used_size       = 0;
     heap_stats.num_allocations = 0;
-    heap_stats.num_blocks = 1;
+    heap_stats.num_blocks      = 1;
+
+    irq_restore(irq);
 }
 
-/**
- * Find a free block that can fit the requested size (first-fit).
- */
+void heap_init(void) {
+    heap_init_at((void *)(uintptr_t)HEAP_START, HEAP_INITIAL_SIZE, HEAP_MAX_SIZE);
+}
+
 static heap_block_t *find_free_block(uint32_t size) {
     heap_block_t *current = heap_head;
-    
     while (current != NULL) {
         if (current->is_free && current->size >= size) {
             return current;
         }
         current = current->next;
     }
-    
-    return NULL;  /* No suitable block found */
+    return NULL;
 }
 
-/**
- * Split a block if it's large enough to hold both the allocation and a new free block.
- */
 static void split_block(heap_block_t *block, uint32_t size) {
-    uint32_t remaining = block->size - size - HEADER_SIZE;
-    
-    /* Only split if remaining space is worth it */
-    if (remaining >= MIN_BLOCK_SIZE + HEADER_SIZE) {
-        heap_block_t *new_block = (heap_block_t *)((uint8_t *)block + HEADER_SIZE + size);
-        
-        new_block->magic = HEAP_BLOCK_MAGIC;
-        new_block->size = remaining;
-        new_block->is_free = 1;
-        new_block->prev = block;
-        new_block->next = block->next;
-        
-        if (block->next != NULL) {
-            block->next->prev = new_block;
-        }
-        
-        block->next = new_block;
-        block->size = size;
-        
-        heap_stats.num_blocks++;
-        heap_stats.free_size -= HEADER_SIZE;
+    if (block->size < size + HEADER_SIZE + MIN_BLOCK_SIZE) {
+        return;
     }
+
+    uint32_t remaining = block->size - size - HEADER_SIZE;
+    heap_block_t *new_block = (heap_block_t *)((uint8_t *)block + HEADER_SIZE + size);
+
+    new_block->magic   = HEAP_BLOCK_MAGIC;
+    new_block->size    = remaining;
+    new_block->is_free = 1;
+    new_block->prev    = block;
+    new_block->next    = block->next;
+
+    if (block->next != NULL) {
+        block->next->prev = new_block;
+    }
+
+    block->next = new_block;
+    block->size = size;
+
+    heap_stats.num_blocks++;
+    heap_stats.free_size -= HEADER_SIZE;
 }
 
-/**
- * Coalesce adjacent free blocks.
- */
 static void coalesce(heap_block_t *block) {
-    /* Coalesce with next block if free */
     if (block->next != NULL && block->next->is_free) {
         block->size += HEADER_SIZE + block->next->size;
         block->next = block->next->next;
-        
         if (block->next != NULL) {
             block->next->prev = block;
         }
-        
         heap_stats.num_blocks--;
         heap_stats.free_size += HEADER_SIZE;
     }
-    
-    /* Coalesce with previous block if free */
+
     if (block->prev != NULL && block->prev->is_free) {
         block->prev->size += HEADER_SIZE + block->size;
         block->prev->next = block->next;
-        
         if (block->next != NULL) {
             block->next->prev = block->prev;
         }
-        
         heap_stats.num_blocks--;
         heap_stats.free_size += HEADER_SIZE;
     }
 }
 
+static int heap_expand(uint32_t min_bytes) {
+    uint32_t grow = ALIGN_UP(min_bytes + HEADER_SIZE, 0x100000U); /* Grow in 1MB chunks */
+    if (heap_cur_size + grow > heap_max_limit) {
+        if (heap_cur_size >= heap_max_limit) return 0;
+        grow = heap_max_limit - heap_cur_size;
+        if (grow < min_bytes + HEADER_SIZE) return 0;
+    }
+
+#ifdef __i386__
+    pmm_reserve_region((uint32_t)(heap_base_addr + heap_cur_size), grow);
+#endif
+
+    heap_block_t *new_blk = (heap_block_t *)(heap_base_addr + heap_cur_size);
+    new_blk->magic   = HEAP_BLOCK_MAGIC;
+    new_blk->size    = grow - HEADER_SIZE;
+    new_blk->is_free = 1;
+    new_blk->next    = NULL;
+
+    heap_block_t *tail = heap_head;
+    while (tail->next != NULL) {
+        tail = tail->next;
+    }
+    tail->next    = new_blk;
+    new_blk->prev = tail;
+
+    heap_cur_size         += grow;
+    heap_stats.total_size += grow;
+    heap_stats.free_size  += new_blk->size;
+    heap_stats.num_blocks++;
+
+    coalesce(new_blk);
+    return 1;
+}
+
 void *kmalloc(uint32_t size) {
-    if (size == 0) {
+    if (size == 0 || !heap_head) {
         return NULL;
     }
-    
-    /* Align size to 8 bytes */
-    size = (size + 7) & ~7;
-    
+
+    size = (size + 7U) & ~7U;
+
+    uint32_t irq = irq_save();
+
     heap_block_t *block = find_free_block(size);
-    
     if (block == NULL) {
-        /* TODO: Expand heap by requesting more pages from PMM */
+        if (heap_expand(size)) {
+            block = find_free_block(size);
+        }
+    }
+
+    if (block == NULL) {
+        irq_restore(irq);
         return NULL;
     }
-    
-    /* Split block if necessary */
+
     split_block(block, size);
-    
     block->is_free = 0;
-    
-    /* Update statistics */
+
     heap_stats.used_size += block->size;
     heap_stats.free_size -= block->size;
     heap_stats.num_allocations++;
-    
-    /* Return pointer to data area (after header) */
-    return (void *)((uint8_t *)block + HEADER_SIZE);
+
+    void *res = (void *)((uint8_t *)block + HEADER_SIZE);
+    irq_restore(irq);
+    return res;
 }
 
 void *kzalloc(uint32_t size) {
@@ -157,120 +183,105 @@ void *kzalloc(uint32_t size) {
 }
 
 void *kmalloc_aligned(uint32_t size, uint32_t alignment) {
-    if (alignment < 4) alignment = 4;
-    
-    /* Allocate enough space for size + alignment + 4 bytes to store the original pointer */
-    uint32_t total_size = size + alignment + 4;
+    if (alignment < 8) alignment = 8;
+    if (!IS_POWER_OF_2(alignment)) return NULL;
+
+    uint32_t meta = 2 * sizeof(uintptr_t);
+    uint32_t total_size = size + alignment + meta;
     void *raw_ptr = kmalloc(total_size);
     if (raw_ptr == NULL) return NULL;
-    
-    /* Calculate aligned address, leaving at least 4 bytes before it for the raw pointer */
-    uint32_t addr = (uint32_t)raw_ptr + 4;
-    uint32_t aligned_addr = (addr + alignment - 1) & ~(alignment - 1);
-    
-    /* Store the raw pointer immediately before the aligned address */
-    ((void **)aligned_addr)[-1] = raw_ptr;
-    
+
+    uintptr_t addr = (uintptr_t)raw_ptr + meta;
+    uintptr_t aligned_addr = (addr + (uintptr_t)alignment - 1) & ~((uintptr_t)alignment - 1);
+
+    uintptr_t *slot = (uintptr_t *)aligned_addr;
+    slot[-1] = HEAP_ALIGNED_MAGIC;
+    slot[-2] = (uintptr_t)raw_ptr;
+
     return (void *)aligned_addr;
 }
 
 void kfree(void *ptr) {
-    if (ptr == NULL) {
+    if (ptr == NULL || !heap_head) {
         return;
     }
 
-    /* Check if this pointer is aligned and has a stored raw pointer.
-     * We need a way to distinguish between normal kmalloc and kmalloc_aligned.
-     * Since we don't have a flag in the header yet, we check if the pointer
-     * immediately follows a valid heap_block_t header. */
-    
+    uint32_t irq = irq_save();
+
+    uintptr_t p = (uintptr_t)ptr;
+    if (p < heap_base_addr + HEADER_SIZE || p >= heap_base_addr + heap_cur_size) {
+        irq_restore(irq);
+        return;
+    }
+
     heap_block_t *block = (heap_block_t *)((uint8_t *)ptr - HEADER_SIZE);
-    
-    /* If the magic doesn't match, it might be an aligned pointer */
+
     if (block->magic != HEAP_BLOCK_MAGIC) {
-        /* Try to retrieve original pointer from kmalloc_aligned */
-        void *raw_ptr = ((void **)ptr)[-1];
-        
-        /* Validate the raw pointer */
-        if (raw_ptr != NULL && (uint32_t)raw_ptr >= HEAP_START) {
-            heap_block_t *raw_block = (heap_block_t *)((uint8_t *)raw_ptr - HEADER_SIZE);
-            if (raw_block->magic == HEAP_BLOCK_MAGIC) {
-                ptr = raw_ptr;
-                block = raw_block;
-            } else {
-                /* Not a valid heap block */
-                return;
+        uintptr_t *slot = (uintptr_t *)ptr;
+        if (p >= heap_base_addr + HEADER_SIZE + 2 * sizeof(uintptr_t) &&
+            slot[-1] == HEAP_ALIGNED_MAGIC) {
+            void *raw_ptr = (void *)slot[-2];
+            if ((uintptr_t)raw_ptr >= heap_base_addr + HEADER_SIZE &&
+                (uintptr_t)raw_ptr < heap_base_addr + heap_cur_size) {
+                block = (heap_block_t *)((uint8_t *)raw_ptr - HEADER_SIZE);
             }
-        } else {
-            return;
         }
     }
-    
-    /* Validate magic number */
-    if (block->magic != HEAP_BLOCK_MAGIC) {
-        /* Heap corruption detected! */
+
+    if (block->magic != HEAP_BLOCK_MAGIC || block->is_free) {
+        irq_restore(irq);
         return;
     }
-    
-    if (block->is_free) {
-        /* Double free detected! */
-        return;
-    }
-    
+
     block->is_free = 1;
-    
-    /* Update statistics */
+
     heap_stats.used_size -= block->size;
     heap_stats.free_size += block->size;
-    heap_stats.num_allocations--;
-    
-    /* Coalesce with adjacent free blocks */
+    if (heap_stats.num_allocations > 0) {
+        heap_stats.num_allocations--;
+    }
+
     coalesce(block);
+    irq_restore(irq);
 }
 
 void *krealloc(void *ptr, uint32_t new_size) {
-    if (ptr == NULL) {
-        return kmalloc(new_size);
-    }
-    
+    if (ptr == NULL) return kmalloc(new_size);
     if (new_size == 0) {
         kfree(ptr);
         return NULL;
     }
-    
-    /* Get current block */
+
     heap_block_t *block = (heap_block_t *)((uint8_t *)ptr - HEADER_SIZE);
-    
-    /* If current block is large enough, just return it */
-    if (block->size >= new_size) {
-        return ptr;
-    }
-    
-    /* Allocate new block and copy data */
+    if (block->magic != HEAP_BLOCK_MAGIC) return NULL;
+    if (block->size >= new_size) return ptr;
+
     void *new_ptr = kmalloc(new_size);
     if (new_ptr != NULL) {
         memcpy(new_ptr, ptr, block->size);
         kfree(ptr);
     }
-    
     return new_ptr;
 }
 
 void heap_get_stats(heap_stats_t *stats) {
     if (stats != NULL) {
+        uint32_t irq = irq_save();
         *stats = heap_stats;
+        irq_restore(irq);
     }
 }
 
 int heap_check(void) {
+    uint32_t irq = irq_save();
     heap_block_t *current = heap_head;
-    
     while (current != NULL) {
         if (current->magic != HEAP_BLOCK_MAGIC) {
-            return 0;  /* Corruption detected */
+            irq_restore(irq);
+            return 0;
         }
         current = current->next;
     }
-    
-    return 1;  /* Heap is valid */
+    irq_restore(irq);
+    return 1;
 }

@@ -1,4 +1,4 @@
-name: Build & Release
+name: Build, Test & Release
 
 on:
   push:
@@ -8,50 +8,82 @@ on:
   pull_request:
     branches: [ main, master ]
 
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
-  build:
-    name: Build Bengal Tiger OS ISO
+  build-and-test:
+    name: Build ISO & Run Hardware/Unit Verification
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install build dependencies
+      - name: Install build & QEMU test dependencies
         run: |
-          sudo apt update
-          sudo apt install -y \
+          sudo apt-get update
+          sudo apt-get install -y \
             gcc-multilib \
+            binutils \
             grub-pc-bin \
             grub-common \
             xorriso \
             mtools \
+            qemu-system-x86 \
+            python3 \
             make
 
-      - name: Build kernel and ISO
-        run: make all
+      - name: Build kernel & bootable GRUB ISO
+        run: make iso
 
-      - name: Upload ISO as build artifact
+      - name: Verify Multiboot1 compliance (grub-file + ELF verifier)
+        run: |
+          grub-file --is-x86-multiboot build/kernel.bin
+          make check-multiboot
+
+      - name: Run ASan/UBSan host unit & subsystem tests
+        run: make test-unit
+
+      - name: Run 2-boot QEMU E2E test (E1000 DHCP, ICMP Ping, FAT16 Persistence)
+        run: make test-qemu
+
+      - name: Generate SHA-256 checksums
+        run: |
+          sha256sum bengaltiger.iso > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Upload ISO & Checksums as build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: bengaltiger-iso
-          path: bengaltiger.iso
+          name: bengaltiger-release-assets
+          path: |
+            bengaltiger.iso
+            SHA256SUMS.txt
           if-no-files-found: error
 
   release:
-    name: Create GitHub Release
+    name: Publish GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: build-and-test
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download built ISO
+      - name: Download verified ISO & Checksums
         uses: actions/download-artifact@v4
         with:
-          name: bengaltiger-iso
+          name: bengaltiger-release-assets
+
+      - name: Verify SHA-256 integrity
+        run: sha256sum -c SHA256SUMS.txt
 
       - name: Extract version from tag
         id: get_version
@@ -59,50 +91,50 @@ jobs:
           VERSION="${GITHUB_REF#refs/tags/}"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-      - name: Generate release body
+      - name: Generate release notes
         id: release_body
         run: |
           cat > release_body.md << 'RELEOF'
-          ## Bengal Tiger OS ${{ steps.get_version.outputs.version }}
+          ## Bengal Tiger OS ${{ steps.get_version.outputs.version }} ("Royal Bengal")
 
-          A 32-bit hobby operating system for x86 real hardware — boots via GRUB with Multiboot support.
+          A real-world usable 32-bit x86 operating system built from scratch in C and Assembly — bootable on QEMU, VirtualBox, VMware, and real x86 PCs via GRUB Multiboot1.
 
-          ### What's included
-          - Bootable ISO image — works in QEMU, VirtualBox, and on real x86 hardware
-          - Full Multiboot-compliant kernel with proper GDT, A20, CPUID, FPU/SSE init
-          - VBE framebuffer graphics (1024x768x32, 800x600x32, 1280x1024x32)
-          - PS/2 keyboard & mouse drivers
-          - ATA/ATAPI disk driver with IDENTIFY support
-          - RTC (CMOS clock), Serial port (16550 UART)
-          - VGA text shell with 30+ commands
-          - 8x16 bitmap font rendering
+          ### Highlights in ${{ steps.get_version.outputs.version }}
+          - **Unified High-Resolution Console & Desktop (`gui`)**: Simultaneous 24/32-bit VBE linear framebuffer console (1024x768x32 default with live UTC status bar), classic VGA 80x25 text mode with hardware cursor, interactive VBE graphical desktop workspace, and full VT100/ANSI COM1 serial console.
+          - **Real TCP/IP Networking (`nic` + `net`)**: Intel PRO/1000 (`E1000`) & Realtek `RTL8139` PCI NIC drivers, Ethernet II, ARP cache & resolution, IPv4 routing, automatic DHCPv4 DORA client (`dhcp`), and live ICMP Echo Request/Reply (`ping`).
+          - **Persistent FAT12/FAT16 Storage + Live RAMDisk**: Automatic 512 KB Live FAT12 RAMDisk on ISO/USB boot, `mkfs` formatter for persistent ATA hard disks, MBR partition + Superfloppy mounting, multi-cluster read/write/append/copy/rename/delete, shell script runner (`sh`), and full-screen text editor (`edit`).
+          - **Preemptive Multitasking & Memory Management**: E820-aware physical frame allocator, 32 MB identity-mapped virtual paging with dynamic MMIO page tables, interrupt-safe expandable 16 MB kernel heap, and 100 Hz round-robin preemptive scheduler with `INT 0x80` syscalls (`spawn`, `ps`, `top`, `kill`).
 
-          ### Build from source
+          ### Quick Start (Download & Boot)
+          Download **`bengaltiger.iso`** below (verify with `SHA256SUMS.txt`) and boot in QEMU, VirtualBox, VMware, or flash to USB:
+          ```bash
+          qemu-system-i386 -cdrom bengaltiger.iso -m 64M -netdev user,id=n0 -device e1000,netdev=n0 -serial stdio
+          ```
+
+          ### Build & Test from Source
           ```bash
           git clone https://github.com/${{ github.repository }}
           cd Bengal-Tiger-OS
-          make all
+          make iso
+          make test
+          make test-qemu
           ```
-
-          ### Run in QEMU
-          ```bash
-          make run
-          ```
-
-          ### License
-          See the [LICENSE](https://github.com/${{ github.repository }}/blob/main/licence) file.
           RELEOF
-          echo "body<<EOF" >> $GITHUB_OUTPUT
-          cat release_body.md >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          {
+            echo "body<<EOF"
+            cat release_body.md
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
-      - name: Create Release
+      - name: Create or Update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: Bengal Tiger OS ${{ steps.get_version.outputs.version }}
+          name: Bengal Tiger OS ${{ steps.get_version.outputs.version }} (Royal Bengal)
           body: ${{ steps.release_body.outputs.body }}
-          files: bengaltiger.iso
+          files: |
+            bengaltiger.iso
+            SHA256SUMS.txt
           draft: false
           prerelease: false
           generate_release_notes: false

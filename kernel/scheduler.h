@@ -1,11 +1,13 @@
 /**
  * Bengal Tiger OS - Preemptive Task Scheduler
- * 
- * Supports circular multi-tasking, kernel threads, task creation, and context switching.
- * 
+ *
+ * Round-robin preemptive multitasking kernel thread scheduler with
+ * per-task CPU tick accounting, clean voluntary yields (INT 0x80),
+ * zombie reaping, and interrupt-safe task creation/termination.
+ *
  * @file scheduler.h
  * @author Bengal Tiger OS (BengalEmpire)
- * @version 0.6.0
+ * @version 1.0.0
  */
 
 #ifndef SCHEDULER_H
@@ -20,63 +22,30 @@
 #define TASK_STATE_BLOCKED  3
 #define TASK_STATE_ZOMBIE   4
 
-/* Maximum tasks */
 #define MAX_TASKS 64
 
-/* Task structure */
 typedef struct task {
     uint32_t id;                /* Task ID / PID */
     char name[32];              /* Task name */
-    uint32_t state;             /* Task state */
-    struct regs *regs_ptr;      /* Pointer to saved register frame on task stack */
-    void *stack_base;           /* Allocated stack base */
-    uint32_t *page_dir;         /* Task's page directory */
-    struct task *next;          /* Next task in queue */
-    struct task *prev;          /* Previous task in queue */
+    volatile uint32_t state;    /* Task state */
+    uint32_t cpu_ticks;         /* Scheduled CPU ticks */
+    struct regs *regs_ptr;      /* Saved register frame on task stack */
+    void *stack_base;           /* Allocated kernel stack base */
+    uint32_t *page_dir;         /* Task page directory (NULL = kernel) */
+    struct task *next;
+    struct task *prev;
 } task_t;
 
-/* Global tick counter */
 extern volatile uint32_t tick;
 
-/**
- * Initialize the scheduler.
- */
 void scheduler_init(void);
-
-/**
- * Scheduler tick - called on every timer IRQ for preemptive context switching.
- * Returns pointer to the current task's register frame.
- */
 struct regs* scheduler_tick(struct regs *r);
-
-/**
- * Get current task.
- */
+struct regs* scheduler_schedule(struct regs *r);
 task_t* scheduler_get_current(void);
-
-/**
- * Yield CPU to next task.
- */
 void scheduler_yield(void);
-
-/**
- * Create a new kernel task thread.
- */
 task_t* task_create(const char *name, void (*entry_point)(void));
-
-/**
- * Terminate current task execution.
- */
 void task_exit(void);
-
-/**
- * Kill task by PID.
- */
 int task_kill(uint32_t pid);
-
-/**
- * Get list of tasks.
- */
 task_t* scheduler_get_task_list(int *count);
 
 #endif /* SCHEDULER_H */

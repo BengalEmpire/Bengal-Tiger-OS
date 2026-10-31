@@ -1,89 +1,175 @@
 /**
  * Bengal Tiger OS - Memory Management Implementation
- * 
- * Physical Memory Manager using bitmap allocation.
- * Paging with identity mapping for first 4MB.
- * 
+ *
+ * Bitmap Physical Memory Manager (E820-aware, 4GB-safe) and 32-bit x86 Paging
+ * with 32MB identity mapping and safe high-MMIO mapping (VBE, E1000, etc.).
+ *
  * @file paging.c
  * @author Bengal Tiger OS (BengalEmpire)
- * @version 0.3.0
+ * @version 1.0.0
  */
 
 #include "paging.h"
+#include "heap.h"
 #include "common.h"
 
 /* ============================================ */
 /* Physical Memory Manager                      */
 /* ============================================ */
 
-/* Bitmap: each bit represents one 4KB page frame 
- * 32768 * 32 bits = 1,048,576 frames = 4GB max addressable */
-#define BITMAP_SIZE 32768
+#define BITMAP_SIZE 32768   /* 32768 * 32 = 1,048,576 frames = 4GB */
 static uint32_t bitmap[BITMAP_SIZE];
 
-/* Memory statistics */
 static uint32_t total_frames = 0;
-static uint32_t used_frames = 0;
+static uint32_t used_frames  = 0;
 
-void pmm_init(uint32_t mem_size, uint32_t kernel_end) {
-    total_frames = mem_size / PAGE_SIZE;
-    
-    /* Initially mark all frames as used (1 = used) */
-    memset(bitmap, 0xFF, sizeof(bitmap));
-    
-    /* Calculate first usable frame (after kernel) */
-    uint32_t first_free = ALIGN_UP(kernel_end, PAGE_SIZE);
-    
-    /* Mark frames from first_free to mem_size as free */
-    for (uint32_t addr = first_free; addr < mem_size; addr += PAGE_SIZE) {
-        uint32_t frame = addr / PAGE_SIZE;
-        if (frame / 32 < BITMAP_SIZE) {
-            bitmap[frame / 32] &= ~(1 << (frame % 32));  /* 0 = free */
+/* Static fallback pool of 32 page-aligned page tables (128KB) in BSS so
+ * mapping high MMIO (VBE framebuffer, PCI BARs) is ALWAYS virtual-safe
+ * even on low-memory systems. */
+#define STATIC_PT_POOL_COUNT 32
+static uint32_t static_pt_pool[STATIC_PT_POOL_COUNT][1024] __attribute__((aligned(4096)));
+static uint32_t static_pt_used = 0;
+
+static inline void frame_set_used(uint32_t frame) {
+    if (frame / 32 < BITMAP_SIZE) {
+        uint32_t mask = (1U << (frame % 32));
+        if (!(bitmap[frame / 32] & mask)) {
+            bitmap[frame / 32] |= mask;
+            used_frames++;
         }
     }
-    
-    /* Calculate used frames (kernel + reserved) */
-    used_frames = first_free / PAGE_SIZE;
+}
+
+static inline void frame_set_free(uint32_t frame) {
+    if (frame / 32 < BITMAP_SIZE) {
+        uint32_t mask = (1U << (frame % 32));
+        if (bitmap[frame / 32] & mask) {
+            bitmap[frame / 32] &= ~mask;
+            if (used_frames > 0) used_frames--;
+        }
+    }
+}
+
+void pmm_reserve_region(uint32_t base, uint32_t size) {
+    uint32_t start_frame = ALIGN_DOWN(base, PAGE_SIZE) / PAGE_SIZE;
+    uint64_t end_addr = (uint64_t)base + (uint64_t)size;
+    if (end_addr > 0xFFFFF000ULL) end_addr = 0xFFFFF000ULL;
+    uint32_t end_frame = (uint32_t)(ALIGN_UP((uint32_t)end_addr, PAGE_SIZE) / PAGE_SIZE);
+
+    for (uint32_t f = start_frame; f < end_frame && f < BITMAP_SIZE * 32; f++) {
+        frame_set_used(f);
+    }
+}
+
+void pmm_init(uint32_t mem_size, uint32_t reserved_end) {
+    total_frames = mem_size / PAGE_SIZE;
+    if (total_frames > BITMAP_SIZE * 32) {
+        total_frames = BITMAP_SIZE * 32;
+    }
+
+    memset(bitmap, 0xFF, sizeof(bitmap));
+    used_frames = total_frames;
+
+    /* Protect low memory, kernel, initial page tables, and entire max heap */
+    uint32_t min_free = ALIGN_UP(reserved_end, PAGE_SIZE);
+    uint32_t heap_limit = HEAP_START + HEAP_MAX_SIZE;
+    if (min_free < heap_limit) {
+        min_free = heap_limit;
+    }
+
+    for (uint32_t f = min_free / PAGE_SIZE; f < total_frames; f++) {
+        frame_set_free(f);
+    }
+}
+
+void pmm_init_mmap(multiboot_info_t *mbi, uint32_t fallback_mem_size, uint32_t reserved_end) {
+    if (!mbi || !(mbi->flags & (1 << 6)) || mbi->mmap_length == 0) {
+        pmm_init(fallback_mem_size, reserved_end);
+        return;
+    }
+
+    memset(bitmap, 0xFF, sizeof(bitmap));
+    total_frames = 0;
+    used_frames  = 0;
+
+    uint64_t highest_avail = 0;
+    multiboot_mmap_entry_t *entry = multiboot_mmap_first(mbi);
+    while (entry && multiboot_mmap_has_more(mbi, entry)) {
+        if (entry->type == MULTIBOOT_MMAP_AVAILABLE && entry->addr < 0xFFFFF000ULL) {
+            uint64_t start = (entry->addr + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1);
+            uint64_t end = entry->addr + entry->len;
+            if (end > 0xFFFFF000ULL) end = 0xFFFFF000ULL;
+            end &= ~(uint64_t)(PAGE_SIZE - 1);
+            if (end > start && end > highest_avail) {
+                highest_avail = end;
+            }
+        }
+        entry = multiboot_mmap_next(entry);
+    }
+
+    if (highest_avail == 0) {
+        pmm_init(fallback_mem_size, reserved_end);
+        return;
+    }
+
+    total_frames = (uint32_t)(highest_avail / PAGE_SIZE);
+    used_frames  = total_frames;
+
+    /* Free pages strictly within E820 AVAILABLE regions */
+    entry = multiboot_mmap_first(mbi);
+    while (entry && multiboot_mmap_has_more(mbi, entry)) {
+        if (entry->type == MULTIBOOT_MMAP_AVAILABLE && entry->addr < 0xFFFFF000ULL) {
+            uint64_t start = (entry->addr + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1);
+            uint64_t end = entry->addr + entry->len;
+            if (end > 0xFFFFF000ULL) end = 0xFFFFF000ULL;
+            end &= ~(uint64_t)(PAGE_SIZE - 1);
+
+            for (uint64_t addr = start; addr < end; addr += PAGE_SIZE) {
+                frame_set_free((uint32_t)(addr / PAGE_SIZE));
+            }
+        }
+        entry = multiboot_mmap_next(entry);
+    }
+
+    /* Always reserve first 1MB (BIOS/VGA), kernel + page tables, and kernel heap */
+    uint32_t low_protect = ALIGN_UP(reserved_end, PAGE_SIZE);
+    uint32_t heap_limit  = HEAP_START + HEAP_MAX_SIZE;
+    if (low_protect < heap_limit) {
+        low_protect = heap_limit;
+    }
+    pmm_reserve_region(0, low_protect);
 }
 
 uint32_t pmm_alloc_frame(void) {
-    /* Search for first free bit (0) in bitmap */
+    uint32_t irq = irq_save();
     for (uint32_t i = 0; i < BITMAP_SIZE; i++) {
-        if (bitmap[i] != 0xFFFFFFFF) {
-            /* There's at least one free bit in this word */
+        if (bitmap[i] != 0xFFFFFFFFU) {
             for (uint32_t j = 0; j < 32; j++) {
-                if (!(bitmap[i] & (1 << j))) {
-                    /* Found free frame */
+                if (!(bitmap[i] & (1U << j))) {
                     uint32_t frame = i * 32 + j;
-                    
-                    /* Bounds check */
                     if (frame >= total_frames) {
-                        return 0;  /* Out of memory */
+                        irq_restore(irq);
+                        return 0;
                     }
-                    
-                    /* Mark as used */
-                    bitmap[i] |= (1 << j);
+                    bitmap[i] |= (1U << j);
                     used_frames++;
-                    
+                    irq_restore(irq);
                     return frame * PAGE_SIZE;
                 }
             }
         }
     }
-    
-    return 0;  /* Out of memory */
+    irq_restore(irq);
+    return 0;
 }
 
 void pmm_free_frame(uint32_t addr) {
+    uint32_t irq = irq_save();
     uint32_t frame = addr / PAGE_SIZE;
-    
-    if (frame / 32 < BITMAP_SIZE && frame < total_frames) {
-        /* Only free if currently allocated */
-        if (bitmap[frame / 32] & (1 << (frame % 32))) {
-            bitmap[frame / 32] &= ~(1 << (frame % 32));
-            used_frames--;
-        }
+    if (frame < total_frames) {
+        frame_set_free(frame);
     }
+    irq_restore(irq);
 }
 
 uint32_t pmm_get_total_frames(void) {
@@ -94,116 +180,132 @@ uint32_t pmm_get_used_frames(void) {
     return used_frames;
 }
 
+uint32_t pmm_get_free_frames(void) {
+    return (total_frames >= used_frames) ? (total_frames - used_frames) : 0;
+}
+
 /* ============================================ */
 /* Paging Setup                                 */
 /* ============================================ */
 
-/* Page Directory pointer */
 static uint32_t *page_dir = NULL;
 
+static uint32_t* alloc_page_table(void) {
+    /* Prefer static identity-mapped pool first so pt is guaranteed mapped */
+    if (static_pt_used < STATIC_PT_POOL_COUNT) {
+        uint32_t *pt = static_pt_pool[static_pt_used++];
+        memset(pt, 0, PAGE_SIZE);
+        return pt;
+    }
+
+    /* Otherwise allocate a physical frame within the 32MB identity-mapped window */
+    uint32_t phys = pmm_alloc_frame();
+    if (phys != 0 && phys < IDENTITY_MAP_SIZE) {
+        uint32_t *pt = (uint32_t*)phys;
+        memset(pt, 0, PAGE_SIZE);
+        return pt;
+    }
+    if (phys != 0) {
+        pmm_free_frame(phys);
+    }
+    return NULL;
+}
+
 void paging_install(uint32_t mem_size) {
-    (void)mem_size;
-    /* 
-     * Dynamically allocate page directory and initial page tables
-     * right after the kernel’s BSS section.
-     */
+    UNUSED(mem_size);
+
     extern uint32_t bss_end;
-    uint32_t kernel_end = (uint32_t)&bss_end;
-    kernel_end = ALIGN_UP(kernel_end, PAGE_SIZE);
-    
+    uint32_t kernel_end = ALIGN_UP((uint32_t)&bss_end, PAGE_SIZE);
+
     page_dir = (uint32_t*)kernel_end;
     uint32_t *pts = (uint32_t*)(kernel_end + PAGE_SIZE);
-    
-    /* 1. Clear page directory */
+
     memset(page_dir, 0, PAGE_SIZE);
-    
-    /* 2. Identity map first 16MB (4 page tables x 4MB) 
-     * This covers the kernel, page tables, and the heap (at 4MB).
-     * It also ensures that the first few pages allocated by PMM
-     * for subsequent page tables are also identity mapped. */
-    for (uint32_t pt_idx = 0; pt_idx < 4; pt_idx++) {
+
+    /* Identity-map first 32MB (8 page tables x 4MB) covering:
+     * BIOS/VGA (0-1MB), Kernel + BSS + Page Tables (1-4MB),
+     * Expandable 16MB Kernel Heap (4-20MB), and low PMM frames (20-32MB). */
+    for (uint32_t pt_idx = 0; pt_idx < IDENTITY_MAP_TABLES; pt_idx++) {
         uint32_t *pt = pts + (pt_idx * 1024);
         page_dir[pt_idx] = (uint32_t)pt | PAGE_PRESENT | PAGE_WRITABLE;
-        
+
         for (uint32_t pg_idx = 0; pg_idx < 1024; pg_idx++) {
             uint32_t addr = (pt_idx * 4 * 1024 * 1024) + (pg_idx * PAGE_SIZE);
             pt[pg_idx] = addr | PAGE_PRESENT | PAGE_WRITABLE;
         }
     }
-    
-    /* 3. Clear remaining page directory entries (not present) */
-    for (uint32_t i = 4; i < 1024; i++) {
-        page_dir[i] = PAGE_WRITABLE;  /* Not present, but writable if mapped later */
+
+    for (uint32_t i = IDENTITY_MAP_TABLES; i < 1024; i++) {
+        page_dir[i] = PAGE_WRITABLE;
     }
-    
-    /* 5. Load CR3 with page directory address */
+
     __asm__ volatile("mov %0, %%cr3" : : "r"(page_dir) : "memory");
-    
-    /* 6. Enable paging bit in CR0 */
+
     uint32_t cr0;
     __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
-    cr0 |= 0x80000000;  /* Set PG bit (bit 31) */
+    cr0 |= 0x80000000U;
     __asm__ volatile("mov %0, %%cr0" : : "r"(cr0) : "memory");
 }
 
 void paging_map(uint32_t virt, uint32_t phys, uint32_t flags) {
+    if (!page_dir) return;
+
     uint32_t pd_index = virt >> 22;
     uint32_t pt_index = (virt >> 12) & 0x3FF;
-    
-    /* Get or create page table for this region */
+
     uint32_t *pt;
-    
     if (page_dir[pd_index] & PAGE_PRESENT) {
-        pt = (uint32_t*)(page_dir[pd_index] & ~0xFFF);
+        pt = (uint32_t*)(page_dir[pd_index] & ~0xFFFU);
     } else {
-        /* Allocate new page table */
-        pt = (uint32_t*)pmm_alloc_frame();
-        if (pt == NULL) return;
-        
-        memset(pt, 0, PAGE_SIZE);
-        page_dir[pd_index] = (uint32_t)pt | PAGE_PRESENT | PAGE_WRITABLE | (flags & PAGE_USER);
+        pt = alloc_page_table();
+        if (!pt) return;
+        page_dir[pd_index] = (uint32_t)pt | PAGE_PRESENT | PAGE_WRITABLE | (flags & (PAGE_USER | PAGE_PWT | PAGE_PCD));
     }
-    
-    /* Set page table entry */
-    pt[pt_index] = (phys & ~0xFFF) | flags;
-    
-    /* Invalidate TLB for this address */
+
+    pt[pt_index] = (phys & ~0xFFFU) | (flags | PAGE_PRESENT);
     paging_invalidate(virt);
 }
 
+void paging_map_region(uint32_t virt, uint32_t phys, uint32_t size, uint32_t flags) {
+    if (size == 0) return;
+    uint32_t offset = phys & (PAGE_SIZE - 1);
+    uint32_t v_base = ALIGN_DOWN(virt, PAGE_SIZE);
+    uint32_t p_base = ALIGN_DOWN(phys, PAGE_SIZE);
+    uint32_t total  = ALIGN_UP(size + offset, PAGE_SIZE);
+
+    for (uint32_t off = 0; off < total; off += PAGE_SIZE) {
+        paging_map(v_base + off, p_base + off, flags);
+    }
+}
+
 void paging_unmap(uint32_t virt) {
+    if (!page_dir) return;
+
     uint32_t pd_index = virt >> 22;
     uint32_t pt_index = (virt >> 12) & 0x3FF;
-    
-    if (!(page_dir[pd_index] & PAGE_PRESENT)) {
-        return;  /* Page table doesn't exist */
-    }
-    
-    uint32_t *pt = (uint32_t*)(page_dir[pd_index] & ~0xFFF);
-    pt[pt_index] = 0;  /* Clear entry */
-    
+
+    if (!(page_dir[pd_index] & PAGE_PRESENT)) return;
+
+    uint32_t *pt = (uint32_t*)(page_dir[pd_index] & ~0xFFFU);
+    pt[pt_index] = 0;
     paging_invalidate(virt);
 }
 
 uint32_t paging_get_physical(uint32_t virt) {
+    if (!page_dir) return virt;
+
     uint32_t pd_index = virt >> 22;
     uint32_t pt_index = (virt >> 12) & 0x3FF;
-    
-    if (!(page_dir[pd_index] & PAGE_PRESENT)) {
-        return 0;
-    }
-    
-    uint32_t *pt = (uint32_t*)(page_dir[pd_index] & ~0xFFF);
-    
-    if (!(pt[pt_index] & PAGE_PRESENT)) {
-        return 0;
-    }
-    
-    return (pt[pt_index] & ~0xFFF) | (virt & 0xFFF);
+
+    if (!(page_dir[pd_index] & PAGE_PRESENT)) return 0;
+
+    uint32_t *pt = (uint32_t*)(page_dir[pd_index] & ~0xFFFU);
+    if (!(pt[pt_index] & PAGE_PRESENT)) return 0;
+
+    return (pt[pt_index] & ~0xFFFU) | (virt & 0xFFFU);
 }
 
 void paging_flush_tlb(void) {
-    /* Reload CR3 to flush entire TLB */
     uint32_t cr3;
     __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
     __asm__ volatile("mov %0, %%cr3" : : "r"(cr3) : "memory");

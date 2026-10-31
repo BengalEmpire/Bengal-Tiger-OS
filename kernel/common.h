@@ -1,26 +1,24 @@
 /**
  * Bengal Tiger OS - Common Definitions and Utilities
- * 
- * This header provides:
- * - Standard integer types
- * - NULL pointer definition
- * - I/O port access functions
- * - Memory manipulation functions
- * - String functions
- * - CPU register structure
- * 
+ *
+ * Provides standard fixed-width integer types, I/O port instructions,
+ * interrupt flag save/restore helpers, endianness conversions,
+ * memory routines, and string/formatting utilities.
+ *
  * @file common.h
  * @author Bengal Tiger OS (BengalEmpire)
- * @version 0.3.0
+ * @version 1.0.0
  */
 
 #ifndef COMMON_H
 #define COMMON_H
 
-/* ============================================ */
-/* Standard Integer Types                       */
-/* ============================================ */
-
+#ifdef HOST_TEST
+#include <stdint.h>
+#include <stddef.h>
+#include <stdbool.h>
+#include <string.h>
+#else
 typedef unsigned char       uint8_t;
 typedef signed char         int8_t;
 typedef unsigned short      uint16_t;
@@ -31,193 +29,152 @@ typedef unsigned long long  uint64_t;
 typedef signed long long    int64_t;
 typedef unsigned int        size_t;
 typedef signed int          ssize_t;
+typedef unsigned int        uintptr_t;
 
-/* Boolean type */
 typedef int bool;
 #define true  1
 #define false 0
 
-/* NULL pointer */
 #define NULL ((void*)0)
+#endif
 
 /* ============================================ */
-/* I/O Port Access Functions                    */
+/* I/O Port & CPU Control Instructions          */
 /* ============================================ */
 
-/**
- * Write a byte to an I/O port.
- * @param port The port number (0-65535)
- * @param val The byte value to write
- */
+#ifdef __i386__
 void outb(uint16_t port, uint8_t val);
-
-/**
- * Write a word (16-bit) to an I/O port.
- * @param port The port number
- * @param val The word value to write
- */
 void outw(uint16_t port, uint16_t val);
-
-/**
- * Read a byte from an I/O port.
- * @param port The port number
- * @return The byte value read
- */
 uint8_t inb(uint16_t port);
-
-/**
- * Read a word (16-bit) from an I/O port.
- * @param port The port number
- * @return The word value read
- */
 uint16_t inw(uint16_t port);
 
-/* ============================================ */
-/* Memory Functions                             */
-/* ============================================ */
-
-/**
- * Set a region of memory to a specific byte value.
- * @param dest Destination pointer
- * @param val Byte value to set
- * @param len Number of bytes to set
- */
-void memset(void *dest, uint8_t val, uint32_t len);
-
-/**
- * Copy a region of memory.
- * @param dest Destination pointer
- * @param src Source pointer
- * @param len Number of bytes to copy
- */
-void memcpy(void *dest, const void *src, uint32_t len);
-
-/**
- * Compare two memory regions.
- * @param s1 First memory region
- * @param s2 Second memory region
- * @param n Number of bytes to compare
- * @return 0 if equal, <0 if s1<s2, >0 if s1>s2
- */
-int memcmp(const void *s1, const void *s2, uint32_t n);
-
-/* ============================================ */
-/* String Functions                             */
-/* ============================================ */
-
-/**
- * Get the length of a null-terminated string.
- * @param s The string
- * @return Length in bytes (excluding null terminator)
- */
-int strlen(const char *s);
-
-/**
- * Compare two strings.
- * @param s1 First string
- * @param s2 Second string
- * @return 0 if equal, <0 if s1<s2, >0 if s1>s2
- */
-int strcmp(const char *s1, const char *s2);
-
-/**
- * Compare two strings up to n characters.
- * @param s1 First string
- * @param s2 Second string
- * @param n Maximum characters to compare
- * @return 0 if equal, <0 if s1<s2, >0 if s1>s2
- */
-int strncmp(const char *s1, const char *s2, uint32_t n);
-
-/**
- * Copy a string.
- * @param dest Destination buffer
- * @param src Source string
- * @return Pointer to dest
- */
-char *strcpy(char *dest, const char *src);
-
-/**
- * Copy a string with size limit.
- * @param dest Destination buffer
- * @param src Source string
- * @param n Maximum characters to copy
- * @return Pointer to dest
- */
-char *strncpy(char *dest, const char *src, uint32_t n);
-
-/**
- * Concatenate strings.
- * @param dest Destination buffer (must have space)
- * @param src Source string to append
- * @return Pointer to dest
- */
-char *strcat(char *dest, const char *src);
-
-/**
- * Find character in string.
- * @param s The string to search
- * @param c The character to find
- * @return Pointer to first occurrence, or NULL
- */
-char *strchr(const char *s, int c);
-
-/* ============================================ */
-/* CPU Register State (for interrupts)          */
-/* ============================================ */
-
-/**
- * Structure holding saved CPU register state.
- * Pushed by ISR stubs in isr.s
- */
-struct regs {
-    uint32_t gs, fs, es, ds;                     /* Segment selectors */
-    uint32_t edi, esi, ebp, esp, ebx, edx, ecx, eax;  /* pusha registers */
-    uint32_t int_no, err_code;                   /* Interrupt number and error */
-    uint32_t eip, cs, eflags, useresp, ss;       /* Pushed by CPU */
-};
-
-/* ============================================ */
-/* 32-bit I/O Functions (PCI, etc.)               */
-/* ============================================ */
-
-/**
- * Write a 32-bit double-word to an I/O port.
- */
 static inline void outl(uint16_t port, uint32_t val) {
     __asm__ volatile("outl %0, %1" : : "a"(val), "Nd"(port));
 }
 
-/**
- * Read a 32-bit double-word from an I/O port.
- */
 static inline uint32_t inl(uint16_t port) {
     uint32_t ret;
     __asm__ volatile("inl %1, %0" : "=a"(ret) : "Nd"(port));
     return ret;
 }
 
+static inline void cli(void) {
+    __asm__ volatile("cli" ::: "memory");
+}
+
+static inline void sti(void) {
+    __asm__ volatile("sti" ::: "memory");
+}
+
+static inline void hlt(void) {
+    __asm__ volatile("hlt");
+}
+
+static inline uint32_t irq_save(void) {
+    uint32_t flags;
+    __asm__ volatile("pushfl\n\tpopl %0\n\tcli" : "=r"(flags) : : "memory");
+    return flags;
+}
+
+static inline void irq_restore(uint32_t flags) {
+    __asm__ volatile("pushl %0\n\tpopfl" : : "r"(flags) : "memory", "cc");
+}
+
+static inline int irq_are_enabled(void) {
+    uint32_t flags;
+    __asm__ volatile("pushfl\n\tpopl %0" : "=r"(flags));
+    return (flags & (1 << 9)) ? 1 : 0;
+}
+#else
+/* Host-mode stubs for unit testing */
+static inline void outb(uint16_t port, uint8_t val) { (void)port; (void)val; }
+static inline void outw(uint16_t port, uint16_t val) { (void)port; (void)val; }
+static inline uint8_t inb(uint16_t port) { (void)port; return 0; }
+static inline uint16_t inw(uint16_t port) { (void)port; return 0; }
+static inline void outl(uint16_t port, uint32_t val) { (void)port; (void)val; }
+static inline uint32_t inl(uint16_t port) { (void)port; return 0; }
+static inline void cli(void) {}
+static inline void sti(void) {}
+static inline void hlt(void) {}
+static inline uint32_t irq_save(void) { return 0; }
+static inline void irq_restore(uint32_t flags) { (void)flags; }
+static inline int irq_are_enabled(void) { return 0; }
+#endif
+
+/* ============================================ */
+/* Byte-Order Helpers (Network Big-Endian)      */
+/* ============================================ */
+
+static inline uint16_t bswap16(uint16_t v) {
+    return (uint16_t)((v >> 8) | (v << 8));
+}
+
+static inline uint32_t bswap32(uint32_t v) {
+    return ((v & 0x000000FFU) << 24) |
+           ((v & 0x0000FF00U) << 8)  |
+           ((v & 0x00FF0000U) >> 8)  |
+           ((v & 0xFF000000U) >> 24);
+}
+
+#ifndef htons
+#define htons(x) bswap16(x)
+#define ntohs(x) bswap16(x)
+#define htonl(x) bswap32(x)
+#define ntohl(x) bswap32(x)
+#endif
+
+/* ============================================ */
+/* Memory & String Functions                    */
+/* ============================================ */
+
+#ifndef HOST_TEST
+void memset(void *dest, uint8_t val, uint32_t len);
+void memcpy(void *dest, const void *src, uint32_t len);
+void *memmove(void *dest, const void *src, uint32_t len);
+int memcmp(const void *s1, const void *s2, uint32_t n);
+
+int strlen(const char *s);
+int strcmp(const char *s1, const char *s2);
+int strncmp(const char *s1, const char *s2, uint32_t n);
+int strcasecmp(const char *s1, const char *s2);
+int strncasecmp(const char *s1, const char *s2, uint32_t n);
+char *strcpy(char *dest, const char *src);
+char *strncpy(char *dest, const char *src, uint32_t n);
+char *strcat(char *dest, const char *src);
+char *strchr(const char *s, int c);
+char *strstr(const char *haystack, const char *needle);
+#else
+#include <strings.h>
+#endif
+
+int k_atoi(const char *s);
+void k_itoa(int32_t val, char *buf, int base);
+void k_utoa(uint32_t val, char *buf, int base);
+
+/* ============================================ */
+/* CPU Register State (for interrupts)          */
+/* ============================================ */
+
+struct regs {
+    uint32_t gs, fs, es, ds;                         /* Segment selectors */
+    uint32_t edi, esi, ebp, esp, ebx, edx, ecx, eax; /* pusha registers */
+    uint32_t int_no, err_code;                       /* Interrupt number and error */
+    uint32_t eip, cs, eflags, useresp, ss;           /* Pushed by CPU */
+};
+
 /* ============================================ */
 /* Utility Macros                               */
 /* ============================================ */
 
-/* Get minimum/maximum of two values */
-#define MIN(a, b) ((a) < (b) ? (a) : (b))
-#define MAX(a, b) ((a) > (b) ? (a) : (b))
+#define MIN(a, b)        ((a) < (b) ? (a) : (b))
+#define MAX(a, b)        ((a) > (b) ? (a) : (b))
+#define ARRAY_SIZE(arr)  (sizeof(arr) / sizeof((arr)[0]))
 
-/* Align value up to boundary (must be power of 2) */
-#define ALIGN_UP(val, align) (((val) + (align) - 1) & ~((align) - 1))
-
-/* Align value down to boundary */
+#define ALIGN_UP(val, align)   (((val) + (align) - 1) & ~((align) - 1))
 #define ALIGN_DOWN(val, align) ((val) & ~((align) - 1))
+#define IS_POWER_OF_2(x)       ((x) != 0 && ((x) & ((x) - 1)) == 0)
 
-/* Check if value is power of 2 */
-#define IS_POWER_OF_2(x) ((x) != 0 && ((x) & ((x) - 1)) == 0)
-
-/* Unused parameter marker */
 #define UNUSED(x) (void)(x)
-
-/* Compiler memory barrier */
 #define MEMORY_BARRIER() __asm__ volatile("" ::: "memory")
 
 #endif /* COMMON_H */

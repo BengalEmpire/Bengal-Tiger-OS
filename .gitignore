@@ -1,5 +1,8 @@
 build/
 iso/
+isodir/
 bengaltiger.iso
+SHA256SUMS.txt
 *.o
 *.bin
+*.img

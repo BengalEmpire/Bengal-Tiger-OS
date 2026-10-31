@@ -81,19 +81,25 @@ static int a20_enable_keyboard(void) {
  * Writes a test pattern at 1MB boundary and reads it back.
  */
 static int a20_check(void) {
-    /* Use a simple test: write a value at 0x100000 (1MB),
-     * then check if we can read it back from 0x000000.
-     * If A20 is disabled, they'd be the same memory (wrapped). */
-    volatile uint32_t *ptr_1mb = (volatile uint32_t*)0x100000;
-    volatile uint32_t *ptr_0 = (volatile uint32_t*)0x000000;
-    uint32_t saved = *ptr_0;
+    /* Non-destructive wrap-around test between 0x007E00 and 0x107E00 (bit 20).
+     * Both locations are saved and restored so memory stays intact. */
+    uintptr_t addr_low  = 0x007E00U;
+    uintptr_t addr_high = 0x107E00U;
+    __asm__ volatile("" : "+r"(addr_low), "+r"(addr_high));
 
-    *ptr_0 = 0xBEEFBEEF;
-    *ptr_1mb = 0xDEADBEEF;
+    volatile uint32_t *ptr_low  = (volatile uint32_t*)addr_low;
+    volatile uint32_t *ptr_high = (volatile uint32_t*)addr_high;
 
-    int enabled = (*ptr_0 == 0xBEEFBEEF);
+    uint32_t saved_low  = *ptr_low;
+    uint32_t saved_high = *ptr_high;
 
-    *ptr_0 = saved;  /* Restore */
+    *ptr_low  = 0x00AA5500U;
+    *ptr_high = 0xFF55AAFFU;
+
+    int enabled = (*ptr_low == 0x00AA5500U);
+
+    *ptr_high = saved_high;
+    *ptr_low  = saved_low;
     return enabled;
 }
 
