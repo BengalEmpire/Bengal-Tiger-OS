@@ -393,7 +393,7 @@ void shell_print_prompt(void) {
     prompt_row = cur_y;
 }
 
-static void redraw_input_line(int prev_len) {
+static void redraw_input_line(int prev_len, int sync_serial) {
     int max_draw = (cmd_len > prev_len) ? cmd_len : prev_len;
 
     if (vbe_is_active()) {
@@ -418,14 +418,15 @@ static void redraw_input_line(int prev_len) {
     int cpos = prompt_col + cmd_cursor;
     console_set_cursor(cpos % con_cols, prompt_row + (cpos / con_cols), 1);
 
-    /* Keep serial terminal cleanly synchronized */
-    ser_putc('\r');
-    ser_puts(username);
-    ser_puts("@bengal:~$ ");
-    for (int i = 0; i < cmd_len; i++) ser_putc(cmd_buf[i]);
-    for (int i = cmd_len; i < prev_len; i++) ser_putc(' ');
-    int back = ((prev_len > cmd_len) ? prev_len : cmd_len) - cmd_cursor;
-    for (int i = 0; i < back; i++) ser_putc('\b');
+    if (sync_serial) {
+        ser_putc('\r');
+        ser_puts(username);
+        ser_puts("@bengal:~$ ");
+        for (int i = 0; i < cmd_len; i++) ser_putc(cmd_buf[i]);
+        for (int i = cmd_len; i < prev_len; i++) ser_putc(' ');
+        int back = ((prev_len > cmd_len) ? prev_len : cmd_len) - cmd_cursor;
+        for (int i = 0; i < back; i++) ser_putc('\b');
+    }
 }
 
 static void history_push(const char *line) {
@@ -503,7 +504,7 @@ static void handle_tab_completion(void) {
                 cmd_buf[cmd_len]   = '\0';
                 cmd_cursor++;
             }
-            redraw_input_line(prev_len);
+            redraw_input_line(prev_len, 1);
         }
     } else {
         int common = strlen(matches[0]);
@@ -527,7 +528,7 @@ static void handle_tab_completion(void) {
         }
         shell_putchar('\n');
         shell_print_prompt();
-        redraw_input_line(0);
+        redraw_input_line(0, 1);
     }
 }
 
@@ -1718,9 +1719,10 @@ void shell_execute_line(const char *raw_line) {
         while (1) hlt();
     } else if (strcmp(verb, "shutdown") == 0 || strcmp(verb, "poweroff") == 0) {
         shell_print_color("Shutting down Bengal Tiger OS...\n", 0x0E);
-        outw(0x604,  0x2000); /* QEMU / KVM */
-        outw(0x4004, 0x3400); /* VirtualBox */
+        outw(0x604,  0x2000); /* QEMU / KVM PIIX4 ACPI */
+        outw(0x4004, 0x3400); /* VirtualBox ACPI */
         outw(0xB004, 0x2000); /* Bochs / older QEMU */
+        outb(0xF4,   0x00);   /* QEMU isa-debug-exit fallback */
         shell_print("It is now safe to power off your computer.\n");
         cli();
         while (1) hlt();
@@ -1741,7 +1743,7 @@ void shell_handle_event(int ev) {
 
     if (ev == '\n') {
         cmd_cursor = cmd_len;
-        redraw_input_line(prev_len);
+        redraw_input_line(prev_len, 0);
         shell_putchar('\n');
 
         cmd_buf[cmd_len] = '\0';
@@ -1758,7 +1760,7 @@ void shell_handle_event(int ev) {
         shell_print_prompt();
     } else if (ev == CTRL_KEY('c')) {
         cmd_cursor = cmd_len;
-        redraw_input_line(prev_len);
+        redraw_input_line(prev_len, 0);
         shell_print("^C\n");
         cmd_len     = 0;
         cmd_cursor  = 0;
@@ -1768,36 +1770,42 @@ void shell_handle_event(int ev) {
     } else if (ev == CTRL_KEY('l')) {
         shell_clear();
         shell_print_prompt();
-        redraw_input_line(0);
+        redraw_input_line(0, 1);
     } else if (ev == '\b') {
         if (cmd_cursor > 0) {
+            int at_end = (cmd_cursor == cmd_len);
             memmove(cmd_buf + cmd_cursor - 1, cmd_buf + cmd_cursor, (uint32_t)(cmd_len - cmd_cursor + 1));
             cmd_cursor--;
             cmd_len--;
-            redraw_input_line(prev_len);
+            if (at_end) {
+                redraw_input_line(prev_len, 0);
+                ser_puts("\b \b");
+            } else {
+                redraw_input_line(prev_len, 1);
+            }
         }
     } else if (ev == KEY_SPECIAL_DELETE) {
         if (cmd_cursor < cmd_len) {
             memmove(cmd_buf + cmd_cursor, cmd_buf + cmd_cursor + 1, (uint32_t)(cmd_len - cmd_cursor));
             cmd_len--;
-            redraw_input_line(prev_len);
+            redraw_input_line(prev_len, 1);
         }
     } else if (ev == KEY_SPECIAL_LEFT) {
         if (cmd_cursor > 0) {
             cmd_cursor--;
-            redraw_input_line(prev_len);
+            redraw_input_line(prev_len, 1);
         }
     } else if (ev == KEY_SPECIAL_RIGHT) {
         if (cmd_cursor < cmd_len) {
             cmd_cursor++;
-            redraw_input_line(prev_len);
+            redraw_input_line(prev_len, 1);
         }
     } else if (ev == KEY_SPECIAL_HOME || ev == CTRL_KEY('a')) {
         cmd_cursor = 0;
-        redraw_input_line(prev_len);
+        redraw_input_line(prev_len, 1);
     } else if (ev == KEY_SPECIAL_END || ev == CTRL_KEY('e')) {
         cmd_cursor = cmd_len;
-        redraw_input_line(prev_len);
+        redraw_input_line(prev_len, 1);
     } else if (ev == KEY_SPECIAL_UP) {
         if (history_count > 0) {
             if (history_nav < 0) history_nav = history_count - 1;
@@ -1805,7 +1813,7 @@ void shell_handle_event(int ev) {
             strcpy(cmd_buf, history[history_nav]);
             cmd_len    = strlen(cmd_buf);
             cmd_cursor = cmd_len;
-            redraw_input_line(prev_len);
+            redraw_input_line(prev_len, 1);
         }
     } else if (ev == KEY_SPECIAL_DOWN) {
         if (history_nav >= 0) {
@@ -1820,7 +1828,7 @@ void shell_handle_event(int ev) {
                 cmd_len    = strlen(cmd_buf);
                 cmd_cursor = cmd_len;
             }
-            redraw_input_line(prev_len);
+            redraw_input_line(prev_len, 1);
         }
     } else if (ev == '\t') {
         handle_tab_completion();
@@ -1828,19 +1836,25 @@ void shell_handle_event(int ev) {
         shell_putchar('\n');
         cmd_help();
         shell_print_prompt();
-        redraw_input_line(0);
+        redraw_input_line(0, 1);
     } else if (ev == KEY_SPECIAL_F2) {
         shell_putchar('\n');
         cmd_gui();
         shell_print_prompt();
-        redraw_input_line(0);
+        redraw_input_line(0, 1);
     } else if (ev >= 32 && ev <= 126) {
         if (cmd_len < CMD_BUF_MAX - 1) {
+            int at_end = (cmd_cursor == cmd_len);
             memmove(cmd_buf + cmd_cursor + 1, cmd_buf + cmd_cursor, (uint32_t)(cmd_len - cmd_cursor + 1));
             cmd_buf[cmd_cursor] = (char)ev;
             cmd_cursor++;
             cmd_len++;
-            redraw_input_line(prev_len);
+            if (at_end) {
+                redraw_input_line(prev_len, 0);
+                ser_putc((char)ev);
+            } else {
+                redraw_input_line(prev_len, 1);
+            }
         }
     }
 }

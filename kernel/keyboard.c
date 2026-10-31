@@ -15,18 +15,18 @@ keyboard_modifiers_t kb_modifiers = {0, 0, 0, 0, 1, 0, 0};
 
 /* ASCII ring buffer */
 static char key_buffer[KB_BUFFER_SIZE];
-static volatile uint8_t buffer_head = 0;
-static volatile uint8_t buffer_tail = 0;
+static volatile uint16_t buffer_head = 0;
+static volatile uint16_t buffer_tail = 0;
 
 /* Extended keycode ring buffer */
 static keycode_t keycode_buffer[KB_BUFFER_SIZE];
-static volatile uint8_t kc_buffer_head = 0;
-static volatile uint8_t kc_buffer_tail = 0;
+static volatile uint16_t kc_buffer_head = 0;
+static volatile uint16_t kc_buffer_tail = 0;
 
 /* Unified event ring buffer (stores ASCII 1..127 or KEY_SPECIAL_* > 1000) */
 static int event_buffer[KB_BUFFER_SIZE];
-static volatile uint8_t ev_head = 0;
-static volatile uint8_t ev_tail = 0;
+static volatile uint16_t ev_head = 0;
+static volatile uint16_t ev_tail = 0;
 
 /* Track 0xE0 extended scancode prefix */
 static uint8_t e0_prefix = 0;
@@ -56,7 +56,7 @@ static const char scancode_upper[128] = {
 };
 
 static void event_push(int ev) {
-    uint8_t next = (uint8_t)((ev_head + 1) & (KB_BUFFER_SIZE - 1));
+    uint16_t next = (uint16_t)((ev_head + 1) & (KB_BUFFER_SIZE - 1));
     if (next != ev_tail) {
         event_buffer[ev_head] = ev;
         ev_head = next;
@@ -64,7 +64,7 @@ static void event_push(int ev) {
 }
 
 static void buffer_push(char ch) {
-    uint8_t next_head = (uint8_t)((buffer_head + 1) & (KB_BUFFER_SIZE - 1));
+    uint16_t next_head = (uint16_t)((buffer_head + 1) & (KB_BUFFER_SIZE - 1));
     if (next_head != buffer_tail) {
         key_buffer[buffer_head] = ch;
         buffer_head = next_head;
@@ -72,7 +72,7 @@ static void buffer_push(char ch) {
 }
 
 static void keycode_push(keycode_t *key) {
-    uint8_t next_head = (uint8_t)((kc_buffer_head + 1) & (KB_BUFFER_SIZE - 1));
+    uint16_t next_head = (uint16_t)((kc_buffer_head + 1) & (KB_BUFFER_SIZE - 1));
     if (next_head != kc_buffer_tail) {
         keycode_buffer[kc_buffer_head] = *key;
         kc_buffer_head = next_head;
@@ -274,7 +274,7 @@ int input_poll_event(void) {
         return KEY_NONE;
     }
     int ev = event_buffer[ev_tail];
-    ev_tail = (uint8_t)((ev_tail + 1) & (KB_BUFFER_SIZE - 1));
+    ev_tail = (uint16_t)((ev_tail + 1) & (KB_BUFFER_SIZE - 1));
     irq_restore(irq);
     return ev;
 }
@@ -301,7 +301,7 @@ char keyboard_getchar(void) {
         uint32_t irq = irq_save();
         if (buffer_head != buffer_tail) {
             char ch = key_buffer[buffer_tail];
-            buffer_tail = (uint8_t)((buffer_tail + 1) & (KB_BUFFER_SIZE - 1));
+            buffer_tail = (uint16_t)((buffer_tail + 1) & (KB_BUFFER_SIZE - 1));
             irq_restore(irq);
             return ch;
         }
@@ -321,7 +321,7 @@ char keyboard_getchar_nonblock(void) {
         return 0;
     }
     char ch = key_buffer[buffer_tail];
-    buffer_tail = (uint8_t)((buffer_tail + 1) & (KB_BUFFER_SIZE - 1));
+    buffer_tail = (uint16_t)((buffer_tail + 1) & (KB_BUFFER_SIZE - 1));
     irq_restore(irq);
     return ch;
 }
@@ -333,7 +333,7 @@ int keyboard_get_keycode(keycode_t *key) {
         return 0;
     }
     *key = keycode_buffer[kc_buffer_tail];
-    kc_buffer_tail = (uint8_t)((kc_buffer_tail + 1) & (KB_BUFFER_SIZE - 1));
+    kc_buffer_tail = (uint16_t)((kc_buffer_tail + 1) & (KB_BUFFER_SIZE - 1));
     irq_restore(irq);
     return 1;
 }

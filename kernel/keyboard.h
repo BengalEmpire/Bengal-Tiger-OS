@@ -58,7 +58,7 @@
 #define SC_F12              0x58
 
 #define SC_RELEASE_BIT      0x80
-#define KB_BUFFER_SIZE      128
+#define KB_BUFFER_SIZE      256
 
 /* High-level input event codes (> 255 for special navigation keys) */
 #define KEY_NONE            0
